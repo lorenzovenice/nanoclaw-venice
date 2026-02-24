@@ -1,8 +1,20 @@
 # NanoClaw (Venice API)
 
-A fork of [NanoClaw](https://github.com/qwibitai/nanoclaw) powered by [Venice AI](https://venice.ai). All inference — including the setup itself — runs through your Venice API key. No Anthropic subscription needed.
+A personal AI assistant that runs on your phone via WhatsApp and Telegram — powered by [Venice AI](https://venice.ai) for private, uncensored inference. No Anthropic subscription needed.
 
-Supports WhatsApp and Telegram out of the box.
+### Why Venice AI?
+
+[Venice](https://venice.ai) is a privacy-first AI platform. They [don't store or log any prompts or responses](https://venice.ai/privacy) on their servers — your conversations exist only on your device. Requests are encrypted end-to-end through their proxy to decentralized GPU providers, with zero data retention. This means your AI assistant conversations stay private, even from Venice themselves.
+
+Venice also hosts both frontier models (Claude Opus, Claude Sonnet) and open-source models (Llama, Qwen) through a single API — switch between them anytime.
+
+### Why NanoClaw over OpenClaw?
+
+[OpenClaw](https://github.com/nicferrier/openclaw) has nearly half a million lines of code, 53 config files, and 70+ dependencies. Its security is at the application level — allowlists and pairing codes. Everything runs in one process with shared memory.
+
+[NanoClaw](https://github.com/qwibitai/nanoclaw) is the same core functionality in a codebase small enough to actually understand: one process and a handful of files. Agents run in isolated Linux containers with real OS-level sandboxing — not just permission checks. Each group gets its own filesystem, memory, and container. The codebase is small enough that you can read it, audit it, and have Claude modify it for your needs.
+
+This fork adds a lightweight translation proxy so everything runs through Venice AI instead of Anthropic directly.
 
 ---
 
