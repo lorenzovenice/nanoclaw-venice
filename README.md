@@ -6,7 +6,7 @@ A personal AI assistant that runs on your phone via WhatsApp and Telegram — po
 
 [Venice](https://venice.ai) is a privacy-first AI platform. They [don't store or log any prompts or responses](https://venice.ai/privacy) on their servers — your conversations exist only on your device. Requests are encrypted end-to-end through their proxy to decentralized GPU providers, with zero data retention. This means your AI assistant conversations stay private, even from Venice themselves.
 
-Venice also hosts both frontier models (Claude Opus, Claude Sonnet) and open-source models (Llama, Qwen) through a single API — switch between them anytime.
+Venice provides anonymized access to frontier models (Claude Opus, Claude Sonnet) and fully private access to open-source models (GLM, Qwen) through a single API — switch between them anytime.
 
 ### Why NanoClaw over OpenClaw?
 
