@@ -62,7 +62,7 @@ cd nanoclaw-venice
 ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude
 ```
 
-This starts Claude Code powered by your Venice API key. You'll see the Claude Code prompt.
+Claude Code will detect the API key and ask "Do you want to use this API key?" — **select Yes**. (It marks "No" as recommended by default, but you want "Yes" here to route through Venice.)
 
 ### 4. Run the setup wizard
 
