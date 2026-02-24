@@ -130,7 +130,7 @@ Venice hosts these Claude models directly. Switch to any Venice model:
 - **In terminal:** `claude --model llama-3.3-70b`
 - **In chat:** "switch to llama-3.3-70b" or "use opus"
 
-Works with `claude-opus-4-6`, `claude-sonnet-4-6`, `llama-3.3-70b`, `qwen3-4b`, and anything else on [Venice](https://docs.venice.ai/api-reference/endpoint/models/list).
+Works with `claude-opus-4-6`, `claude-sonnet-4-6`, `llama-3.3-70b`, `qwen3-4b`, and anything else on [Venice](https://docs.venice.ai/models/overview).
 
 ---
 
