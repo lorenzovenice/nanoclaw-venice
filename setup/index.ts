@@ -6,6 +6,8 @@ import { logger } from '../src/logger.js';
 import { emitStatus } from './status.js';
 
 const STEPS: Record<string, () => Promise<{ run: (args: string[]) => Promise<void> }>> = {
+  venice: () => import('./venice.js'),
+  channels: () => import('./channels.js'),
   environment: () => import('./environment.js'),
   container: () => import('./container.js'),
   'whatsapp-auth': () => import('./whatsapp-auth.js'),

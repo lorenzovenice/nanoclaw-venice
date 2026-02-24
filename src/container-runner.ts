@@ -183,7 +183,17 @@ function buildVolumeMounts(
  * Secrets are never written to disk or mounted as files.
  */
 function readSecrets(): Record<string, string> {
-  return readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']);
+  const secrets = readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL']);
+  // If using Venice proxy, pass the base URL so the SDK inside the
+  // container can reach the proxy running on the host.
+  const baseUrl = secrets.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL;
+  if (baseUrl) {
+    secrets.ANTHROPIC_BASE_URL = baseUrl.replace(
+      /localhost|127\.0\.0\.1/,
+      'host.docker.internal',
+    );
+  }
+  return secrets;
 }
 
 function buildContainerArgs(mounts: VolumeMount[], containerName: string): string[] {

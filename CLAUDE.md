@@ -1,10 +1,10 @@
-# NanoClaw
+# NanoClaw (Venice API)
 
-Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
+Personal AI assistant powered by Venice AI. Fork of NanoClaw — see [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
 
 ## Quick Context
 
-Single Node.js process that connects to WhatsApp, routes messages to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
+Single Node.js process that connects to WhatsApp and/or Telegram, routes messages to Claude Agent SDK running in containers (Linux VMs). All inference goes through Venice AI's API via a local translation proxy (`proxy/venice-proxy.ts`). Each group has isolated filesystem and memory.
 
 ## Key Files
 
@@ -12,6 +12,8 @@ Single Node.js process that connects to WhatsApp, routes messages to Claude Agen
 |------|---------|
 | `src/index.ts` | Orchestrator: state, message loop, agent invocation |
 | `src/channels/whatsapp.ts` | WhatsApp connection, auth, send/receive |
+| `src/channels/telegram.ts` | Telegram bot connection, send/receive |
+| `proxy/venice-proxy.ts` | Anthropic→OpenAI format proxy for Venice API |
 | `src/ipc.ts` | IPC watcher and task processing |
 | `src/router.ts` | Message formatting and outbound routing |
 | `src/config.ts` | Trigger pattern, paths, intervals |
@@ -32,12 +34,28 @@ Single Node.js process that connects to WhatsApp, routes messages to Claude Agen
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
 
+## Venice API & Model Switching
+
+All inference routes through Venice AI via a local proxy:
+- **CLI default**: `claude-opus-4-6`
+- **Agent default**: `claude-sonnet-4-6`
+- Users can switch models by asking the bot (e.g., "switch to llama-3.3-70b")
+- The proxy passes model names straight through to Venice — any Venice model ID works
+
+## Model Switching (for agents)
+
+When a user asks to switch models (e.g., "switch to opus", "use a faster model"):
+- Write the desired Venice model ID to `/workspace/group/.venice-model`
+- Default: `claude-sonnet-4-6`. Other options: `claude-opus-4-6`, `llama-3.3-70b`, `zai-org-glm-4.7`, `qwen3-4b`, or any Venice model ID
+- The change takes effect on the next message
+
 ## Development
 
 Run commands directly—don't tell the user to run them.
 
 ```bash
-npm run dev          # Run with hot reload
+npm run dev          # Run with hot reload (starts proxy + nanoclaw)
+npm run proxy        # Run just the Venice proxy
 npm run build        # Compile TypeScript
 ./container/build.sh # Rebuild agent container
 ```
