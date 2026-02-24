@@ -4,175 +4,179 @@ A fork of [NanoClaw](https://github.com/qwibitai/nanoclaw) that routes all infer
 
 Supports WhatsApp and Telegram out of the box.
 
-## What This Is
-
-NanoClaw is a personal AI assistant that runs Claude agents in isolated containers. It connects to WhatsApp and/or Telegram so you can message your assistant from your phone. Agents are sandboxed in Linux containers with filesystem isolation.
-
-This fork adds a lightweight translation proxy that sits between the Anthropic Claude SDK and Venice AI's API. The proxy translates Anthropic message format to OpenAI format and back, so the entire Anthropic Agent SDK works unchanged through Venice.
-
 ```
 Claude Agent SDK ──► Venice Proxy (localhost:4001) ──► api.venice.ai
                      (auto-started, transparent)       (Claude, Llama, Qwen, etc.)
 ```
 
-## Prerequisites
+---
 
-- macOS or Linux
-- Node.js 20+
-- [Claude Code](https://claude.ai/download) (CLI)
-- [Docker](https://docker.com/products/docker-desktop) or [Apple Container](https://github.com/apple/container) (macOS)
-- A [Venice AI API key](https://venice.ai/settings/api)
-- (Optional) A Telegram bot token from [@BotFather](https://t.me/BotFather)
+## Before You Start
 
-## Quick Start
+You need these installed on your machine:
+
+1. **Node.js 20+** — check with `node -v`. Install from [nodejs.org](https://nodejs.org) or `brew install node`
+2. **Docker** — check with `docker -v`. Install from [docker.com](https://docker.com/products/docker-desktop) (make sure it's running)
+3. **Claude Code CLI** — install from [claude.ai/download](https://claude.ai/download)
+4. **Venice AI API key** — sign up and get one at [venice.ai/settings/api](https://venice.ai/settings/api)
+5. **(Optional) Telegram bot token** — create a bot via [@BotFather](https://t.me/BotFather) on Telegram if you want Telegram support
+
+---
+
+## Setup (5 minutes)
+
+### Step 1: Clone and install
 
 ```bash
-git clone <your-fork-url>
-cd nanoclaw
+git clone https://github.com/lorenzovenice/nanoclaw-venice.git
+cd nanoclaw-venice
 npm install
+```
+
+### Step 2: Run the setup wizard
+
+```bash
 claude
 ```
 
-Then inside Claude Code, run:
+This opens Claude Code in your terminal. Then type:
 
 ```
 /setup
 ```
 
-Claude Code handles everything: Venice API configuration, dependencies, WhatsApp/Telegram authentication, container setup, and service configuration.
+Claude Code will walk you through everything interactively:
 
-## Setup Walkthrough
+1. **Venice API key** — paste your key from [venice.ai/settings/api](https://venice.ai/settings/api)
+2. **Choose channel** — WhatsApp, Telegram, or both
+3. **Container setup** — builds the agent container (Docker must be running)
+4. **WhatsApp auth** — scan a QR code (skipped if you chose Telegram-only)
+5. **Register main channel** — pick your trigger word and main chat
+6. **Start service** — NanoClaw runs in the background automatically
 
-The `/setup` command walks you through each step interactively. Here's what happens:
+That's it. Send a message to your bot and it will respond.
 
-### 1. Venice API Key
+---
 
-You'll be asked for your Venice API key. Get one at [venice.ai/settings/api](https://venice.ai/settings/api).
+## Manual Setup (Without Claude Code)
 
-The setup validates your key against Venice's API, then writes these to `.env`:
+If you don't want to use the `/setup` wizard:
 
 ```bash
-VENICE_API_KEY=your-key
-ANTHROPIC_BASE_URL=http://localhost:4001
-ANTHROPIC_API_KEY=venice-proxy
+git clone https://github.com/lorenzovenice/nanoclaw-venice.git
+cd nanoclaw-venice
+npm install
 ```
 
-### 2. Choose Messaging Channel
-
-Pick one:
-- **WhatsApp** — scan a QR code to link your WhatsApp account
-- **Telegram** — provide a bot token from [@BotFather](https://t.me/BotFather)
-- **Both** — run WhatsApp and Telegram simultaneously
-
-### 3. Container Runtime
-
-Docker (default) or Apple Container (macOS). The setup detects what's available and builds the agent container image.
-
-### 4. WhatsApp Authentication (if selected)
-
-Scan a QR code or use a pairing code to link your WhatsApp account.
-
-### 5. Register Main Channel
-
-Choose your trigger word (default: `@Andy`) and main channel (self-chat, DM, or group).
-
-### 6. Start Service
-
-The setup installs a system service (launchd on macOS, systemd on Linux) so NanoClaw runs in the background.
-
-## Manual Setup (Without /setup)
-
-If you prefer to configure manually:
-
-1. Copy the example env file:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Edit `.env` with your Venice API key:
-   ```bash
-   VENICE_API_KEY=your-actual-key
-   ```
-
-3. (Optional) Add Telegram:
-   ```bash
-   TELEGRAM_BOT_TOKEN=your-bot-token
-   TELEGRAM_ONLY=false   # set to true to skip WhatsApp
-   ```
-
-4. Start in development mode:
-   ```bash
-   npm run dev
-   ```
-
-This starts both the Venice proxy and NanoClaw together.
-
-## Using Claude Code Through Venice
-
-You can also use the Venice proxy for Claude Code in your terminal (outside of NanoClaw):
+Create a `.env` file:
 
 ```bash
-# Start the proxy
-npm run proxy &
+cp .env.example .env
+```
 
-# Set environment variables
+Edit `.env` and add your Venice API key:
+
+```
+VENICE_API_KEY=your-key-from-venice-ai
+```
+
+For Telegram, also add:
+
+```
+TELEGRAM_BOT_TOKEN=your-bot-token-from-botfather
+TELEGRAM_ONLY=false
+```
+
+Set `TELEGRAM_ONLY=true` if you don't want WhatsApp at all.
+
+Start it:
+
+```bash
+npm run dev
+```
+
+This launches both the Venice proxy and NanoClaw together.
+
+---
+
+## Using Claude Code Through Venice (Terminal Only)
+
+If you just want to use the Claude Code CLI through Venice (without the WhatsApp/Telegram bot):
+
+```bash
+# Terminal 1: start the proxy
+cd nanoclaw-venice
+npm run proxy
+
+# Terminal 2: use Claude Code
 export ANTHROPIC_BASE_URL=http://localhost:4001
 export ANTHROPIC_API_KEY=venice-proxy
-
-# Now Claude Code routes through Venice
+export VENICE_API_KEY=your-key-here
 claude
 ```
 
+Now every Claude Code interaction goes through Venice AI.
+
+---
+
 ## Models
 
-Default models:
-- **CLI (Claude Code):** `claude-opus-4-6`
-- **WhatsApp/Telegram agent:** `claude-sonnet-4-6`
+Defaults:
+- **CLI:** `claude-opus-4-6`
+- **Bot agent:** `claude-sonnet-4-6`
 
-Venice hosts these models directly — no mapping or substitution. You can switch to any model Venice supports:
+Venice hosts these models directly. Switch anytime:
 
 - **In terminal:** `claude --model llama-3.3-70b`
-- **In chat:** Tell the bot "switch to opus" or "use llama-3.3-70b"
+- **In chat:** "switch to opus" or "use llama-3.3-70b"
 
-Any Venice model ID works: `claude-opus-4-6`, `claude-sonnet-4-6`, `llama-3.3-70b`, `qwen3-4b`, etc.
+Any Venice model ID works — `claude-opus-4-6`, `claude-sonnet-4-6`, `llama-3.3-70b`, `qwen3-4b`, etc.
 
-## Usage
+---
 
-Talk to your assistant with the trigger word (default: `@Andy`):
+## Talking to Your Bot
+
+Use the trigger word (default `@Andy`) in your registered chat:
 
 ```
-@Andy send an overview of the sales pipeline every weekday morning at 9am
+@Andy what's the weather like today?
+@Andy send me an overview of my tasks every weekday morning at 9am
 @Andy review the git history for the past week each Friday
-@Andy every Monday at 8am, compile AI news from Hacker News and message me a briefing
 ```
 
-From the main channel (your self-chat), manage groups and tasks:
+From the main channel, manage groups and tasks:
+
 ```
-@Andy list all scheduled tasks across groups
-@Andy pause the Monday briefing task
+@Andy list all scheduled tasks
 @Andy join the Family Chat group
+@Andy pause the Monday briefing
 ```
+
+---
 
 ## Development
 
 ```bash
-npm run dev          # Start proxy + NanoClaw with hot reload
+npm run dev          # Start proxy + NanoClaw (hot reload)
 npm run proxy        # Start just the Venice proxy
 npm run build        # Compile TypeScript
-npm test             # Run tests
+npm test             # Run tests (428 tests)
 ./container/build.sh # Rebuild agent container
 ```
 
-Enable debug logging for the proxy:
+Debug the proxy:
+
 ```bash
 VENICE_PROXY_DEBUG=1 npm run dev
 ```
+
+---
 
 ## Architecture
 
 ```
 WhatsApp (baileys) ──┐
-                     ├──► SQLite ──► Polling loop ──► Container (Claude Agent SDK) ──► Response
+                     ├──► SQLite ──► Polling loop ──► Container (Claude Agent SDK)
 Telegram (grammy) ───┘                                       │
                                                              ▼
                                                   Venice Proxy (localhost:4001)
@@ -181,53 +185,30 @@ Telegram (grammy) ───┘                                       │
                                                       api.venice.ai
 ```
 
-Single Node.js process. Agents execute in isolated Linux containers. Only mounted directories are accessible. Per-group message queue with concurrency control. IPC via filesystem.
-
 Key files:
 
-| File | Purpose |
-|------|---------|
-| `proxy/venice-proxy.ts` | Anthropic-to-OpenAI translation proxy for Venice |
-| `src/index.ts` | Orchestrator: state, message loop, agent invocation |
-| `src/channels/whatsapp.ts` | WhatsApp connection, auth, send/receive |
-| `src/channels/telegram.ts` | Telegram bot connection, send/receive |
-| `src/container-runner.ts` | Spawns agent containers with mounts |
-| `src/config.ts` | Trigger pattern, paths, intervals |
-| `src/db.ts` | SQLite operations |
-| `groups/*/CLAUDE.md` | Per-group memory (isolated) |
+| File | What it does |
+|------|-------------|
+| `proxy/venice-proxy.ts` | Translates Anthropic format to OpenAI format for Venice |
+| `src/index.ts` | Main orchestrator — message loop, agent invocation |
+| `src/channels/whatsapp.ts` | WhatsApp connection via baileys |
+| `src/channels/telegram.ts` | Telegram bot via grammy |
+| `src/container-runner.ts` | Spawns isolated agent containers |
+| `setup/venice.ts` | Venice API key validation setup step |
+| `setup/channels.ts` | Channel choice setup step |
 
-## Customizing
-
-NanoClaw is designed to be customized by modifying the code. The codebase is small enough that Claude can safely make changes:
-
-- "Change the trigger word to @Bob"
-- "Make responses shorter and more direct"
-- "Add a custom greeting when I say good morning"
-
-Or run `/customize` for guided changes.
+---
 
 ## FAQ
 
-**Why a proxy instead of calling Venice directly?**
+**Why a proxy?** The Claude Agent SDK speaks Anthropic's API format. Venice speaks OpenAI's format. The proxy translates between them so all SDK features (tool use, streaming, agent swarms) work unchanged.
 
-The Claude Agent SDK uses Anthropic's message format. Venice uses OpenAI's format. Rather than rewriting the SDK integration, the proxy translates between the two formats transparently. This means all SDK features (tool use, streaming, agent swarms) work unchanged.
+**Can I use open-source models?** Yes. Tell the bot "switch to llama-3.3-70b" or any Venice model ID.
 
-**Can I use open-source models?**
+**Is it secure?** Agents run in Docker containers with filesystem isolation. Your Venice API key is passed via stdin, never written to disk inside containers.
 
-Yes. Venice hosts many models. Tell the bot "switch to llama-3.3-70b" or use any Venice model ID.
+**Something broke?** Run `/debug` in Claude Code, or ask Claude: "Why isn't the bot responding?"
 
-**Is this secure?**
+---
 
-Agents run in containers, not behind application-level permission checks. They can only access explicitly mounted directories. Your Venice API key is passed to containers via stdin, never written to disk.
-
-**How do I debug issues?**
-
-Ask Claude Code: "Why isn't the scheduler running?", "What's in the recent logs?", "Why did this message not get a response?" Or run `/debug`.
-
-## Based On
-
-[NanoClaw](https://github.com/qwibitai/nanoclaw) by [qwibitai](https://github.com/qwibitai). See the original repo for the full philosophy and contributing guidelines.
-
-## License
-
-MIT
+Based on [NanoClaw](https://github.com/qwibitai/nanoclaw) by [qwibitai](https://github.com/qwibitai). MIT License.
