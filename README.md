@@ -12,7 +12,7 @@ Venice provides anonymized access to frontier models (Claude Opus, Claude Sonnet
 
 | | **Venice AI** | **Traditional AI providers** |
 |---|---|---|
-| **Data retention** | None — zero logs | Typically 30 days |
+| **Data retention** | None — zero logs | Yes |
 | **Prompt privacy** | Encrypted, never stored | Stored on provider servers |
 | **Open-source models** | Yes (GLM, Qwen, and others) | No |
 | **Frontier models** | Claude, GPT, and others — anonymously | Only through direct subscriptions |
