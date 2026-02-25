@@ -16,7 +16,7 @@ Venice provides anonymized access to frontier models (Claude Opus, Claude Sonnet
 | **Prompt privacy** | Encrypted, never stored | Stored on provider servers |
 | **Open-source models** | Yes (GLM, Qwen, and others) | No |
 | **Frontier models** | Claude, GPT, and others — anonymously | Only through direct subscriptions |
-| **Pricing** | Pay-per-token, no subscription | ~$20/mo subscription or pay-per-token API |
+| **Pricing** | Pay-per-token, no subscription. Or stake [DIEM](https://venice.ai/lp/diem) for daily refreshing credits | $20–200/mo subscriptions or pay-per-token API |
 | **Uncensored inference** | Yes (open-source models) | No |
 
 ### Why NanoClaw over OpenClaw?
