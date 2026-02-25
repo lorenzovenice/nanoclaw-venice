@@ -15,7 +15,7 @@ Venice provides anonymized access to frontier models (Claude Opus, Claude Sonnet
 | **Data retention** | None — zero logs | 30 days | 30 days |
 | **Prompt privacy** | Encrypted, never stored | Stored for safety | Stored for training (opt-out available) |
 | **Open-source models** | Yes (GLM, Qwen, and others) | No | No |
-| **Frontier models** | Claude Opus, Sonnet via proxy | Native | GPT-4o, o1 |
+| **Frontier models** | Claude, GPT, and others — anonymously | Native | Native |
 | **Pricing** | Pay-per-token, no subscription | $20/mo Pro or API | $20/mo Plus or API |
 | **Uncensored inference** | Yes (open-source models) | No | No |
 
