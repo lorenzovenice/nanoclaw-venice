@@ -251,7 +251,7 @@ This means the bot tried to use a model that Venice doesn't have. This shouldn't
    - macOS: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
    - Linux: `systemctl --user restart nanoclaw`
 
-3. If it keeps happening, note the exact model name from the error message and let us know.
+3. If it keeps happening, check which models are available on Venice at [docs.venice.ai/models/overview](https://docs.venice.ai/models/overview) and tell the bot to switch to one of those (e.g., "switch to claude-sonnet-4-6").
 
 ### The bot doesn't respond to messages
 
