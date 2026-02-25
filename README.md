@@ -185,65 +185,124 @@ This is the AI that responds to your messages in Telegram/WhatsApp. It runs insi
 
 ### The proxy crashed
 
-The proxy can occasionally crash on connection errors. Open Terminal and restart it:
+The proxy can occasionally crash on connection errors. To restart it:
 
-```bash
-cd nanoclaw-venice
-VENICE_API_KEY=your-key npm run proxy
-```
+1. Open **Terminal** (or find the Terminal window that was running the proxy — it may show an error)
+2. Paste these two commands and press Enter:
+   ```bash
+   cd nanoclaw-venice
+   VENICE_API_KEY=your-key npm run proxy
+   ```
+   (Replace `your-key` with your actual Venice API key)
+3. You should see `Venice API proxy listening on http://localhost:4001` — that means it's working again
+4. **Leave this Terminal window open** — the proxy needs to keep running
 
-**For a more stable setup**, install pm2 (a process manager that auto-restarts crashed processes). Run these in Terminal:
+**Tired of restarting the proxy manually?** You can install pm2, a tool that automatically restarts the proxy if it crashes. Open Terminal and paste:
 
 ```bash
 npm install -g pm2
-VENICE_API_KEY=your-key pm2 start "npx tsx proxy/venice-proxy.ts" --name venice-proxy
 ```
 
-Useful pm2 commands (run these in Terminal anytime):
-```bash
-pm2 logs venice-proxy     # view proxy logs
-pm2 restart venice-proxy  # restart the proxy
-pm2 stop venice-proxy     # stop the proxy
-pm2 status                # see if it's running
-```
-
-### Claude Code says "Please run /login" or shows a 403 error
-
-This means the proxy isn't running or something went wrong with the connection.
-
-1. Check the Terminal window running the proxy is still open and showing output (Step 2)
-2. Make sure you ran `cd nanoclaw-venice` in your second Terminal window before launching Claude Code (Step 3)
-3. Try closing both Terminal windows, then start fresh from Step 2
-
-### Model errors ("model does not exist")
-
-This usually means the bot tried to use a model that isn't available on Venice. This shouldn't happen with normal use — the proxy handles model translation automatically. If you see this error, try restarting the proxy and the bot. If it keeps happening, let us know which model name appeared in the error.
-
-### The bot doesn't respond to messages
-
-1. Make sure the trigger word matches what you set during setup
-2. Open Terminal and run `docker info` — if you see an error, open Docker Desktop first
-3. Open Terminal and run `cd nanoclaw-venice && tail -f logs/nanoclaw.log` to see live logs
-4. Check container logs: open the files in `groups/main/logs/` (look for the most recent `container-*.log` file)
-5. Make sure the Venice proxy is running (check the Terminal window from Step 2)
-
-### Container build fails
-
-Make sure Docker Desktop is open and running. On macOS, open it from your Applications folder. On Linux, run `sudo systemctl start docker`. Then retry the build.
-
-### WhatsApp disconnected
-
-Open Terminal and run these commands to re-authenticate:
+Then start the proxy through pm2 (replace `your-key` with your Venice API key):
 
 ```bash
 cd nanoclaw-venice
-npm run auth
+VENICE_API_KEY=your-key pm2 start "npx tsx proxy/venice-proxy.ts" --name venice-proxy
 ```
 
-Scan the QR code with your phone, then restart the bot:
+Now you can close the Terminal window — pm2 keeps the proxy running in the background and restarts it automatically if it crashes. Here are some useful pm2 commands you can paste into Terminal anytime:
 
-macOS (paste into Terminal): `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
-Linux (paste into Terminal): `systemctl --user restart nanoclaw`
+| What you want to do | Command (paste into Terminal) |
+|---------------------|------|
+| Check if the proxy is running | `pm2 status` |
+| View proxy logs | `pm2 logs venice-proxy` |
+| Restart the proxy | `pm2 restart venice-proxy` |
+| Stop the proxy | `pm2 stop venice-proxy` |
+
+### Claude Code says "Please run /login" or shows a 403 error
+
+This means Claude Code can't connect to the Venice proxy. Here's how to fix it:
+
+1. **Check the proxy is running.** Look at the Terminal window where you started the proxy (Step 2 of setup). It should still show `Venice API proxy listening on http://localhost:4001`. If the window is closed or shows an error, restart the proxy (see above).
+
+2. **Make sure you're in the right folder.** Open a **new Terminal window** and paste:
+   ```bash
+   cd nanoclaw-venice
+   ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude
+   ```
+   The `cd nanoclaw-venice` part is critical — Claude Code won't work if you skip it.
+
+3. **Still not working?** Close all Terminal windows and start fresh:
+   - Open Terminal, paste `cd nanoclaw-venice && VENICE_API_KEY=your-key npm run proxy` (replace `your-key`)
+   - Open a second Terminal window (Cmd + N on macOS), paste `cd nanoclaw-venice && ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude`
+
+### Model errors ("model does not exist")
+
+This means the bot tried to use a model that Venice doesn't have. This shouldn't happen with normal use — the proxy translates model names automatically. To fix it:
+
+1. **Restart the proxy.** Open Terminal and paste:
+   ```bash
+   cd nanoclaw-venice
+   VENICE_API_KEY=your-key npm run proxy
+   ```
+   (Or if you're using pm2: paste `pm2 restart venice-proxy` into Terminal)
+
+2. **Restart the bot.** Open a new Terminal window and paste:
+   - macOS: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
+   - Linux: `systemctl --user restart nanoclaw`
+
+3. If it keeps happening, note the exact model name from the error message and let us know.
+
+### The bot doesn't respond to messages
+
+Work through these steps in order until it starts working:
+
+1. **Check your trigger word.** Make sure you're using the right prefix (e.g., `@Andy hello`). In your main channel, you might not need the prefix at all — just type normally.
+
+2. **Check Docker is running.** Open **Terminal** and paste:
+   ```bash
+   docker info
+   ```
+   If you see an error like "Cannot connect to the Docker daemon", open **Docker Desktop** from your Applications folder (macOS) or run `sudo systemctl start docker` (Linux), wait 10 seconds, then try `docker info` again.
+
+3. **Check the Venice proxy is running.** Look at the Terminal window where you started the proxy. It should show `Venice API proxy listening on http://localhost:4001`. If it crashed, restart it (see "The proxy crashed" above).
+
+4. **Check the bot logs.** Open Terminal and paste:
+   ```bash
+   cd nanoclaw-venice
+   tail -f logs/nanoclaw.log
+   ```
+   This shows live logs — send a message to your bot and watch for errors here. Press **Ctrl + C** to stop watching logs.
+
+5. **Check container logs.** Open the `nanoclaw-venice/groups/main/logs/` folder in Finder (macOS) or your file manager (Linux). Open the most recent file that starts with `container-` — it contains the bot's detailed output.
+
+6. **Restart everything.** If nothing above works, restart both the proxy and the bot:
+   - Restart the proxy: see "The proxy crashed" above
+   - Restart the bot — open Terminal and paste:
+     - macOS: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
+     - Linux: `systemctl --user restart nanoclaw`
+
+### Container build fails during setup
+
+This means Docker couldn't build the bot's container. To fix it:
+
+1. **Make sure Docker Desktop is open and running.** On macOS, find it in your Applications folder and open it. On Linux, open Terminal and paste `sudo systemctl start docker`.
+2. Wait about 10 seconds for Docker to fully start.
+3. Go back to the Claude Code setup wizard and type `continue` to retry the build.
+
+### WhatsApp disconnected
+
+Your WhatsApp session can expire if you haven't used the bot in a while. To reconnect:
+
+1. Open **Terminal** and paste:
+   ```bash
+   cd nanoclaw-venice
+   npm run auth
+   ```
+2. A QR code will appear in Terminal. Open **WhatsApp** on your phone, go to **Settings → Linked Devices → Link a Device**, and scan the QR code.
+3. Once connected, restart the bot. Open a new Terminal window and paste:
+   - macOS: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
+   - Linux: `systemctl --user restart nanoclaw`
 
 ---
 
