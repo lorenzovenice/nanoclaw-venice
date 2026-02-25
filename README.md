@@ -10,14 +10,14 @@ A personal AI assistant that runs on your phone via WhatsApp and Telegram — po
 
 Venice provides anonymized access to frontier models (Claude Opus, Claude Sonnet) and fully private access to open-source models (GLM, Qwen) through a single API — switch between them anytime.
 
-| | **Venice AI** | **Anthropic (Claude)** | **OpenAI (ChatGPT)** |
-|---|---|---|---|
-| **Data retention** | None — zero logs | 30 days | 30 days |
-| **Prompt privacy** | Encrypted, never stored | Stored for safety | Stored for training (opt-out available) |
-| **Open-source models** | Yes (GLM, Qwen, and others) | No | No |
-| **Frontier models** | Claude, GPT, and others — anonymously | Native | Native |
-| **Pricing** | Pay-per-token, no subscription | $20/mo Pro or API | $20/mo Plus or API |
-| **Uncensored inference** | Yes (open-source models) | No | No |
+| | **Venice AI** | **Traditional AI providers** |
+|---|---|---|
+| **Data retention** | None — zero logs | Typically 30 days |
+| **Prompt privacy** | Encrypted, never stored | Stored on provider servers |
+| **Open-source models** | Yes (GLM, Qwen, and others) | No |
+| **Frontier models** | Claude, GPT, and others — anonymously | Only through direct subscriptions |
+| **Pricing** | Pay-per-token, no subscription | ~$20/mo subscription or pay-per-token API |
+| **Uncensored inference** | Yes (open-source models) | No |
 
 ### Why NanoClaw over OpenClaw?
 
@@ -52,12 +52,14 @@ Venice provides anonymized access to frontier models (Claude Opus, Claude Sonnet
 
 You need these four things. If you don't have them, the setup wizard will try to help you install them — but it's easiest if you install them first.
 
+> **What's "Terminal"?** Every command in this guide runs in your computer's built-in command line app. On **macOS**, open **Terminal** (search for "Terminal" in Spotlight, or find it in Applications → Utilities). On **Linux**, open your terminal emulator. On **Windows**, use **PowerShell** or **WSL**. You'll type or paste commands there and press Enter to run them.
+
 | What | How to get it | How to check you have it |
 |------|--------------|--------------------------|
-| **Node.js 20+** | [nodejs.org](https://nodejs.org) or `brew install node` (macOS) | Run `node --version` — should show v20 or higher |
-| **Docker** | [docker.com/products/docker-desktop](https://docker.com/products/docker-desktop) — install and **open it** | Run `docker info` — should show info, not an error |
-| **Claude Code CLI** | [claude.ai/download](https://claude.ai/download) | Run `claude --version` — should show a version number |
-| **Venice AI API key** | Go to [venice.ai/settings/api](https://venice.ai/settings/api), create an account, generate a key | Copy it somewhere — you'll paste it during setup |
+| **Node.js 20+** | [nodejs.org](https://nodejs.org) or `brew install node` (macOS) | Open Terminal, type `node --version` and press Enter — should show v20 or higher |
+| **Docker** | [docker.com/products/docker-desktop](https://docker.com/products/docker-desktop) — install and **open it once** so it's running | Open Terminal, type `docker info` and press Enter — should show info, not an error |
+| **Claude Code CLI** | [claude.ai/download](https://claude.ai/download) — follow the install instructions for your OS | Open Terminal, type `claude --version` and press Enter — should show a version number |
+| **Venice AI API key** | Go to [venice.ai/settings/api](https://venice.ai/settings/api), create an account, generate a key | Copy it somewhere safe — you'll paste it during setup |
 
 **For Telegram** (recommended for first-time users):
 1. Open Telegram and search for **@BotFather**
@@ -69,11 +71,13 @@ You need these four things. If you don't have them, the setup wizard will try to
 
 ## Setup (Step by Step)
 
-The whole setup takes about 10 minutes. You'll need **two terminal windows** open side by side.
+The whole setup takes about 10 minutes. You'll need **two Terminal windows** open side by side.
+
+> **Tip:** On macOS you can open a second Terminal window with **Cmd + N**. On Linux, use **Ctrl + Shift + N** or open a new tab.
 
 ### Step 1: Clone and install
 
-Open a terminal and run these three commands:
+Open **Terminal** and paste these three commands one at a time (press Enter after each one):
 
 ```bash
 git clone https://github.com/lorenzovenice/nanoclaw-venice.git
@@ -85,9 +89,11 @@ Wait for `npm install` to finish. You should see "added X packages" with no erro
 
 ### Step 2: Start the Venice proxy
 
+Still in the **same Terminal window** from Step 1 (you should still be inside the `nanoclaw-venice` folder).
+
 The proxy is a small local server that translates between Claude Code and Venice AI. It needs to stay running the whole time.
 
-Replace `your-key` below with your actual Venice API key (the one from [venice.ai/settings/api](https://venice.ai/settings/api)):
+Replace `your-key` below with your actual Venice API key (the one from [venice.ai/settings/api](https://venice.ai/settings/api)), then paste it into Terminal and press Enter:
 
 ```bash
 VENICE_API_KEY=your-key npm run proxy
@@ -103,11 +109,11 @@ Forwarding to: https://api.venice.ai/api/v1
 
 > **If the proxy crashes:** It can occasionally crash on connection errors. Just run the same command again. See [Troubleshooting](#troubleshooting) for a more stable option using pm2.
 
-### Step 3: Launch Claude Code (in a new terminal)
+### Step 3: Launch Claude Code (in a new Terminal window)
 
-Open a **second terminal window**. Don't close the first one — the proxy needs to stay running.
+Open a **second Terminal window** (Cmd + N on macOS, Ctrl + Shift + N on Linux). **Don't close the first one** — the proxy needs to keep running in it.
 
-Run this command (make sure you're in the nanoclaw-venice folder):
+Paste these two commands into the **new** Terminal window and press Enter:
 
 ```bash
 cd nanoclaw-venice
@@ -116,11 +122,11 @@ ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude
 
 Claude Code will start up. It may ask "Do you want to use this API key?" — **select Yes**.
 
-> **Important:** You must be inside the `nanoclaw-venice` folder when you run this. If you're in a different folder, the `/setup` command won't appear.
+> **Important:** The `cd nanoclaw-venice` command tells Terminal to go into the project folder. You must run this first, otherwise the `/setup` command in the next step won't appear.
 
 ### Step 4: Run the setup wizard
 
-Inside Claude Code, type:
+In your **second Terminal window** (the one running Claude Code), type this and press Enter:
 
 ```
 /setup
@@ -160,7 +166,7 @@ There are two parts to NanoClaw that you interact with:
 
 ### 1. Claude Code CLI (the admin tool)
 
-This is what you used during setup. You can open it anytime to manage your bot:
+This is what you used during setup. You can open it anytime to manage your bot — just open Terminal and paste:
 
 ```bash
 cd nanoclaw-venice
@@ -179,21 +185,21 @@ This is the AI that responds to your messages in Telegram/WhatsApp. It runs insi
 
 ### The proxy crashed
 
-The proxy can occasionally crash on connection errors. Just restart it:
+The proxy can occasionally crash on connection errors. Open Terminal and restart it:
 
 ```bash
 cd nanoclaw-venice
 VENICE_API_KEY=your-key npm run proxy
 ```
 
-**For a more stable setup**, install pm2 (a process manager that auto-restarts crashed processes):
+**For a more stable setup**, install pm2 (a process manager that auto-restarts crashed processes). Run these in Terminal:
 
 ```bash
 npm install -g pm2
 VENICE_API_KEY=your-key pm2 start "npx tsx proxy/venice-proxy.ts" --name venice-proxy
 ```
 
-Useful pm2 commands:
+Useful pm2 commands (run these in Terminal anytime):
 ```bash
 pm2 logs venice-proxy     # view proxy logs
 pm2 restart venice-proxy  # restart the proxy
@@ -205,21 +211,21 @@ pm2 status                # see if it's running
 
 This means the proxy isn't running or something went wrong with the connection.
 
-1. Check your proxy terminal is still running (Step 2)
-2. Make sure you ran the `cd nanoclaw-venice` command before launching Claude Code (Step 3)
-3. Try restarting the proxy and Claude Code
+1. Check the Terminal window running the proxy is still open and showing output (Step 2)
+2. Make sure you ran `cd nanoclaw-venice` in your second Terminal window before launching Claude Code (Step 3)
+3. Try closing both Terminal windows, then start fresh from Step 2
 
 ### Model errors ("model does not exist")
 
-The proxy automatically maps common model names to Venice equivalents. If you see a model error, it means a model name was used that Venice doesn't have. The proxy already handles the most common ones (Haiku, Sonnet 4.5). If you see a new one, you can add it to the `MODEL_MAP` in `proxy/venice-proxy.ts`.
+This usually means the bot tried to use a model that isn't available on Venice. This shouldn't happen with normal use — the proxy handles model translation automatically. If you see this error, try restarting the proxy and the bot. If it keeps happening, let us know which model name appeared in the error.
 
 ### The bot doesn't respond to messages
 
 1. Make sure the trigger word matches what you set during setup
-2. Check Docker is running: `docker info`
-3. Check the logs: `tail -f logs/nanoclaw.log`
-4. Check container logs: look in `groups/main/logs/container-*.log`
-5. Make sure the Venice proxy is running
+2. Open Terminal and run `docker info` — if you see an error, open Docker Desktop first
+3. Open Terminal and run `cd nanoclaw-venice && tail -f logs/nanoclaw.log` to see live logs
+4. Check container logs: open the files in `groups/main/logs/` (look for the most recent `container-*.log` file)
+5. Make sure the Venice proxy is running (check the Terminal window from Step 2)
 
 ### Container build fails
 
@@ -227,10 +233,17 @@ Make sure Docker Desktop is open and running. On macOS, open it from your Applic
 
 ### WhatsApp disconnected
 
-Run `npm run auth` in the nanoclaw-venice folder, scan the QR code again, then restart:
+Open Terminal and run these commands to re-authenticate:
 
-macOS: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
-Linux: `systemctl --user restart nanoclaw`
+```bash
+cd nanoclaw-venice
+npm run auth
+```
+
+Scan the QR code with your phone, then restart the bot:
+
+macOS (paste into Terminal): `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
+Linux (paste into Terminal): `systemctl --user restart nanoclaw`
 
 ---
 
@@ -249,13 +262,13 @@ Available Venice models include `claude-opus-4-6`, `claude-sonnet-4-6`, `zai-org
 
 If you just want to use Claude Code with Venice AI and don't need the WhatsApp/Telegram bot:
 
-**Terminal 1** (leave running):
+Open **Terminal** and paste (replace `your-key` with your Venice API key):
 ```bash
 cd nanoclaw-venice
 VENICE_API_KEY=your-key npm run proxy
 ```
 
-**Terminal 2:**
+Leave that running. Open a **second Terminal window** (Cmd + N on macOS) and paste:
 ```bash
 cd nanoclaw-venice
 ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude
