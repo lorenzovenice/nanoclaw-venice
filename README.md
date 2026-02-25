@@ -280,34 +280,40 @@ That's it. You now have Claude Code running through Venice.
 
 ## Advanced
 
-### Give the bot access to project files
+### Give the bot access to files on your computer
 
-By default, the bot runs in a sandboxed container with no access to your machine's files. This is the secure default. If you want the bot to read or edit its own source code (for self-modification or debugging), you can add mount directories:
+By default, the bot is completely walled off from your computer — it can only see its own memory and conversation history. This is the safe default.
 
-- During setup: choose "Yes" at the mount directories step and provide the paths
-- After setup: re-run the mounts step in Claude Code: `npx tsx setup/index.ts --step mounts`
+If you want the bot to be able to read or edit files on your machine (for example, a project folder or documents), you can give it access:
 
-### Multiple instances on the same machine
+- **During setup:** When the wizard asks about directory access, choose "Yes" and tell it which folders to share
+- **After setup:** Open the Claude Code admin tool (see [How It Works](#how-it-works-the-two-layers)) and run `/customize` to change what the bot can access
 
-If you run multiple NanoClaw instances on the same machine, they share the Docker image name `nanoclaw-agent:latest`. Building the container in one instance replaces the image for all instances. Running containers are not affected, but be aware of this if you maintain multiple bots.
+### Manually starting and stopping the bot
 
-### Service management
+The bot runs as a background service — it starts automatically when your computer boots. If you ever need to manually start, stop, or restart it, open Terminal and paste the command for your system:
 
-macOS:
-```bash
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist      # start
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist    # stop
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw              # restart
-```
+**macOS:**
+| Action | Command (paste into Terminal) |
+|--------|------|
+| Start the bot | `launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist` |
+| Stop the bot | `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist` |
+| Restart the bot | `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` |
 
-Linux:
-```bash
-systemctl --user start nanoclaw    # start
-systemctl --user stop nanoclaw     # stop
-systemctl --user restart nanoclaw  # restart
-```
+**Linux:**
+| Action | Command (paste into Terminal) |
+|--------|------|
+| Start the bot | `systemctl --user start nanoclaw` |
+| Stop the bot | `systemctl --user stop nanoclaw` |
+| Restart the bot | `systemctl --user restart nanoclaw` |
 
-### Development
+### Running multiple bots on the same computer
+
+You can run multiple NanoClaw bots on the same machine (e.g., one for personal use and one for a team). Just clone the repo into a different folder and run setup again. Note: they share the same Docker image, so rebuilding one affects all of them.
+
+### For developers
+
+These commands are for people who want to modify NanoClaw's code. Open Terminal, `cd` into the `nanoclaw-venice` folder, and run:
 
 ```bash
 npm run dev          # Start proxy + NanoClaw with hot reload
