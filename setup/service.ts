@@ -68,9 +68,41 @@ export async function run(_args: string[]): Promise<void> {
   }
 }
 
+function loadEnvFile(projectRoot: string): Record<string, string> {
+  const envPath = path.join(projectRoot, '.env');
+  const vars: Record<string, string> = {};
+  if (!fs.existsSync(envPath)) return vars;
+  const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx);
+    let val = trimmed.slice(eqIdx + 1);
+    // Strip surrounding quotes
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    vars[key] = val;
+  }
+  return vars;
+}
+
 function setupLaunchd(projectRoot: string, nodePath: string, homeDir: string): void {
   const plistPath = path.join(homeDir, 'Library', 'LaunchAgents', 'com.nanoclaw.plist');
   fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+
+  // Load .env vars to include in plist so launchd has them
+  const envVars = loadEnvFile(projectRoot);
+  let envEntries = `        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin</string>
+        <key>HOME</key>
+        <string>${homeDir}</string>`;
+  for (const [key, val] of Object.entries(envVars)) {
+    if (key === 'PATH' || key === 'HOME') continue;
+    envEntries += `\n        <key>${key}</key>\n        <string>${val}</string>`;
+  }
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -91,10 +123,7 @@ function setupLaunchd(projectRoot: string, nodePath: string, homeDir: string): v
     <true/>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin</string>
-        <key>HOME</key>
-        <string>${homeDir}</string>
+${envEntries}
     </dict>
     <key>StandardOutPath</key>
     <string>${projectRoot}/logs/nanoclaw.log</string>
