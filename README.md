@@ -14,7 +14,7 @@ Venice provides anonymized access to frontier models (Claude Opus, Claude Sonnet
 |---|---|---|---|
 | **Data retention** | None — zero logs | 30 days | 30 days |
 | **Prompt privacy** | Encrypted, never stored | Stored for safety | Stored for training (opt-out available) |
-| **Open-source models** | Yes (Llama, Qwen, GLM) | No | No |
+| **Open-source models** | Yes (GLM, Qwen, and others) | No | No |
 | **Frontier models** | Claude Opus, Sonnet via proxy | Native | GPT-4o, o1 |
 | **Pricing** | Pay-per-token, no subscription | $20/mo Pro or API | $20/mo Plus or API |
 | **Uncensored inference** | Yes (open-source models) | No | No |
@@ -41,7 +41,7 @@ Venice provides anonymized access to frontier models (Claude Opus, Claude Sonnet
 - A personal AI assistant on **Telegram** and/or **WhatsApp**
 - Powered by **Venice AI** — no Anthropic account needed
 - Bot runs in an **isolated Docker container** (sandboxed, can't access your system)
-- **Model switching** — tell the bot "switch to llama-3.3-70b" or "use opus" anytime
+- **Model switching** — tell the bot "switch to zai-org-glm-5" or "use opus" anytime
 - **Scheduled tasks** — set reminders, recurring tasks
 - **Web search and browsing** built in
 - **Markdown formatting** in Telegram messages
@@ -238,10 +238,10 @@ Linux: `systemctl --user restart nanoclaw`
 
 | Context | Default Model | How to switch |
 |---------|--------------|---------------|
-| Bot (in chat) | `claude-sonnet-4-6` | Tell the bot: "switch to opus" or "use llama-3.3-70b" |
+| Bot (in chat) | `claude-sonnet-4-6` | Tell the bot: "switch to opus" or "use zai-org-glm-5" |
 | Claude Code CLI | `claude-opus-4-6` | Use `/model` in Claude Code or `claude --model <name>` |
 
-Available Venice models include `claude-opus-4-6`, `claude-sonnet-4-6`, `llama-3.3-70b`, `qwen3-4b`, and more. See the full list at [docs.venice.ai/models/overview](https://docs.venice.ai/models/overview).
+Available Venice models include `claude-opus-4-6`, `claude-sonnet-4-6`, `zai-org-glm-5`, and more. See the full list at [docs.venice.ai/models/overview](https://docs.venice.ai/models/overview).
 
 ---
 
@@ -338,7 +338,7 @@ You (WhatsApp/Telegram)
 
 **Why do I need a proxy?** The Claude Agent SDK speaks Anthropic's message format. Venice speaks OpenAI's format. The proxy translates between them so everything works without modifying the SDK.
 
-**Can I use open-source models?** Yes. Venice hosts many models. Tell the bot "switch to llama-3.3-70b" or any Venice model ID.
+**Can I use open-source models?** Yes. Venice hosts many models. Tell the bot "switch to zai-org-glm-5" or any Venice model ID.
 
 **Is it secure?** Agents run in Docker containers with real OS-level isolation. The Venice API key is passed via stdin, never written to disk inside containers. Each group gets its own isolated environment.
 

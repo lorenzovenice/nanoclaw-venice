@@ -39,14 +39,14 @@ Single Node.js process that connects to WhatsApp and/or Telegram, routes message
 All inference routes through Venice AI via a local proxy:
 - **CLI default**: `claude-opus-4-6`
 - **Agent default**: `claude-sonnet-4-6`
-- Users can switch models by asking the bot (e.g., "switch to llama-3.3-70b")
+- Users can switch models by asking the bot (e.g., "switch to opus" or "use glm-5")
 - The proxy passes model names straight through to Venice — any Venice model ID works
 
 ## Model Switching (for agents)
 
 When a user asks to switch models (e.g., "switch to opus", "use a faster model"):
 - Write the desired Venice model ID to `/workspace/group/.venice-model`
-- Default: `claude-sonnet-4-6`. Other options: `claude-opus-4-6`, `llama-3.3-70b`, `zai-org-glm-4.7`, `qwen3-4b`, or any Venice model ID
+- Default: `claude-sonnet-4-6`. Other options: `claude-opus-4-6`, `zai-org-glm-5`, or any Venice model ID
 - The change takes effect on the next message
 
 ## Development
