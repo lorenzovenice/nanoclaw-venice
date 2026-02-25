@@ -22,6 +22,25 @@ if (!VENICE_API_KEY) {
   process.exit(1);
 }
 
+// Map Anthropic model IDs that Venice doesn't have to Venice equivalents
+const MODEL_MAP: Record<string, string> = {
+  // Haiku → Sonnet (Venice doesn't have Haiku)
+  'claude-haiku-4-5-20251001': 'claude-sonnet-4-6',
+  'claude-3-5-haiku-20241022': 'claude-sonnet-4-6',
+  'claude-3-haiku-20240307': 'claude-sonnet-4-6',
+  // Sonnet 4.5 date-suffixed → Venice's Sonnet 4.6
+  'claude-sonnet-4-5-20250929': 'claude-sonnet-4-6',
+  'claude-4-5-sonnet-20250929': 'claude-sonnet-4-6',
+};
+
+function mapModel(model: string): string {
+  if (MODEL_MAP[model]) {
+    console.log(`[proxy] model remap: ${model} → ${MODEL_MAP[model]}`);
+    return MODEL_MAP[model];
+  }
+  return model;
+}
+
 // --- Request Translation (Anthropic → OpenAI) ---
 
 interface AnthropicMessage {
@@ -187,7 +206,7 @@ function translateRequest(body: AnthropicRequest): Record<string, unknown> {
   openaiMessages.push(...translateMessages(body.messages));
 
   const openaiReq: Record<string, unknown> = {
-    model: body.model,
+    model: mapModel(body.model),
     messages: openaiMessages,
     max_tokens: body.max_tokens,
     stream: body.stream || false,
@@ -493,7 +512,7 @@ function forwardToVenice(
   onData?: (chunk: string) => void,
 ): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; body: Buffer }> {
   return new Promise((resolve, reject) => {
-    const url = new URL(urlPath, VENICE_BASE_URL);
+    const url = new URL(VENICE_BASE_URL + urlPath);
 
     const options: https.RequestOptions = {
       hostname: url.hostname,
@@ -504,6 +523,10 @@ function forwardToVenice(
         ...headers,
         'Authorization': `Bearer ${VENICE_API_KEY}`,
         'Host': url.hostname,
+        'User-Agent': 'NanoClaw/1.1.0',
+        'Accept': 'application/json',
+        'Accept-Encoding': 'identity',
+        ...(body ? { 'Content-Length': String(body.length) } : {}),
       },
     };
 
@@ -543,6 +566,7 @@ function forwardToVenice(
 
 const server = http.createServer(async (req, res) => {
   const url = req.url || '/';
+  console.log(`[proxy] ${req.method} ${url}`);
 
   // Collect request body
   const bodyChunks: Buffer[] = [];
@@ -551,8 +575,9 @@ const server = http.createServer(async (req, res) => {
   }
   const rawBody = Buffer.concat(bodyChunks);
 
-  // Handle Anthropic Messages API
-  if (url === '/v1/messages' && req.method === 'POST') {
+  // Handle Anthropic Messages API (strip query params for matching)
+  const urlPath = url.split('?')[0];
+  if (urlPath === '/v1/messages' && req.method === 'POST') {
     try {
       const anthropicReq: AnthropicRequest = JSON.parse(rawBody.toString());
       const requestModel = anthropicReq.model;
@@ -562,9 +587,7 @@ const server = http.createServer(async (req, res) => {
 
       const requestId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-      if (process.env.VENICE_PROXY_DEBUG) {
-        console.log(`[proxy] ${requestModel} → ${openaiReq.model} (stream=${isStreaming})`);
-      }
+      console.log(`[proxy] ${requestModel} → ${openaiReq.model} (stream=${isStreaming}, body=${openaiBody.length} bytes)`);
 
       if (isStreaming) {
         // Streaming: pipe SSE chunks through translator
@@ -587,6 +610,7 @@ const server = http.createServer(async (req, res) => {
           // If Venice returned a non-200, the translator may not have sent
           // a proper message_stop. Ensure the stream is properly terminated.
           if (streamResp.statusCode !== 200 && !res.writableEnded) {
+            console.error(`[proxy] Venice streaming returned HTTP ${streamResp.statusCode}: ${streamResp.body.toString().slice(0, 500)}`);
             const errorEvent = {
               type: 'error',
               error: { type: 'api_error', message: `Venice API returned HTTP ${streamResp.statusCode}` },
@@ -615,6 +639,7 @@ const server = http.createServer(async (req, res) => {
         );
 
         if (veniceResp.statusCode !== 200) {
+          console.error(`[proxy] Venice returned HTTP ${veniceResp.statusCode}: ${veniceResp.body.toString().slice(0, 500)}`);
           // Translate Venice/OpenAI error format to Anthropic error format
           let errorMessage = `Venice API error (HTTP ${veniceResp.statusCode})`;
           let errorType = 'api_error';
@@ -682,6 +707,14 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(502, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: `Proxy error: ${err}` }));
   }
+});
+
+// Prevent crashes from client disconnects or unhandled rejections
+process.on('uncaughtException', (err) => {
+  console.error('[proxy] Uncaught exception (kept running):', err.message);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[proxy] Unhandled rejection (kept running):', err);
 });
 
 server.listen(PORT, () => {

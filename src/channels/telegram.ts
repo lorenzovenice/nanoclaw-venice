@@ -15,6 +15,72 @@ export interface TelegramChannelOpts {
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Convert standard markdown to Telegram-compatible HTML.
+ * Handles code blocks, inline code, bold, italic, strikethrough, and links.
+ * Code content is preserved verbatim (no markdown processing inside).
+ */
+function markdownToTelegramHtml(md: string): string {
+  let text = md;
+
+  // Extract fenced code blocks — replace with placeholders to protect contents
+  const blocks: string[] = [];
+  text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, _lang, code) => {
+    const i = blocks.length;
+    blocks.push(`<pre>${escapeHtml(code.replace(/\n$/, ''))}</pre>`);
+    return `\x00CB${i}\x00`;
+  });
+
+  // Extract inline code
+  const inlines: string[] = [];
+  text = text.replace(/`([^`\n]+)`/g, (_, code) => {
+    const i = inlines.length;
+    inlines.push(`<code>${escapeHtml(code)}</code>`);
+    return `\x00IC${i}\x00`;
+  });
+
+  // Escape HTML entities in remaining text
+  text = escapeHtml(text);
+
+  // Headers: ### text → bold (Telegram has no native headers)
+  text = text.replace(/^#{1,6}\s+(.+)$/gm, '<b>$1</b>');
+
+  // Horizontal rules
+  text = text.replace(/^[-*_]{3,}\s*$/gm, '———');
+
+  // Bold: **text** or __text__
+  text = text.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  text = text.replace(/__(.+?)__/g, '<b>$1</b>');
+
+  // Italic: *text* or _text_
+  text = text.replace(/\*(.+?)\*/g, '<i>$1</i>');
+  text = text.replace(/(?<!\w)_(.+?)_(?!\w)/g, '<i>$1</i>');
+
+  // Strikethrough: ~~text~~
+  text = text.replace(/~~(.+?)~~/g, '<s>$1</s>');
+
+  // Links: [text](url)
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+
+  // Bullet lists: convert - or * at start of line to bullet character
+  text = text.replace(/^[\t ]*[-*]\s+/gm, '• ');
+
+  // Numbered lists: keep as-is (already readable)
+
+  // Blockquotes: > text → Telegram blockquote (strip the >)
+  text = text.replace(/^&gt;\s?(.*)$/gm, '$1');
+
+  // Restore code placeholders
+  text = text.replace(/\x00CB(\d+)\x00/g, (_, i) => blocks[+i]);
+  text = text.replace(/\x00IC(\d+)\x00/g, (_, i) => inlines[+i]);
+
+  return text;
+}
+
 export class TelegramChannel implements Channel {
   name = 'telegram';
 
@@ -202,16 +268,27 @@ export class TelegramChannel implements Channel {
     try {
       const numericId = jid.replace(/^tg:/, '');
 
+      const html = markdownToTelegramHtml(text);
+
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
-      if (text.length <= MAX_LENGTH) {
-        await this.bot.api.sendMessage(numericId, text);
+      if (html.length <= MAX_LENGTH) {
+        await this.bot.api.sendMessage(numericId, html, { parse_mode: 'HTML' });
       } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await this.bot.api.sendMessage(
-            numericId,
-            text.slice(i, i + MAX_LENGTH),
-          );
+        // Split on double-newline boundaries to avoid breaking tags
+        const chunks: string[] = [];
+        let remaining = html;
+        while (remaining.length > MAX_LENGTH) {
+          let splitAt = remaining.lastIndexOf('\n\n', MAX_LENGTH);
+          if (splitAt <= 0) splitAt = remaining.lastIndexOf('\n', MAX_LENGTH);
+          if (splitAt <= 0) splitAt = MAX_LENGTH;
+          chunks.push(remaining.slice(0, splitAt));
+          remaining = remaining.slice(splitAt).replace(/^\n+/, '');
+        }
+        if (remaining) chunks.push(remaining);
+
+        for (const chunk of chunks) {
+          await this.bot.api.sendMessage(numericId, chunk, { parse_mode: 'HTML' });
         }
       }
       logger.info({ jid, length: text.length }, 'Telegram message sent');

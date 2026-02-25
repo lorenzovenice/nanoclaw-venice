@@ -414,9 +414,21 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // Read model from per-group config file, default to claude-sonnet-4-6
+  const modelFilePath = '/workspace/group/.venice-model';
+  let model = 'claude-sonnet-4-6';
+  try {
+    if (fs.existsSync(modelFilePath)) {
+      const m = fs.readFileSync(modelFilePath, 'utf-8').trim();
+      if (m) model = m;
+    }
+  } catch { /* use default */ }
+  log(`Using model: ${model}`);
+
   for await (const message of query({
     prompt: stream,
     options: {
+      model,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
