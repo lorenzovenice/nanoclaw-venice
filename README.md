@@ -2,11 +2,37 @@
 
 A personal AI assistant that runs on your phone via WhatsApp and Telegram — powered by [Venice AI](https://venice.ai) for private, uncensored inference. No Anthropic subscription needed.
 
+---
+
 ### Why Venice AI?
 
 [Venice](https://venice.ai) is a privacy-first AI platform. They [don't store or log any prompts or responses](https://venice.ai/privacy) on their servers — your conversations exist only on your device. Requests are encrypted end-to-end through their proxy to decentralized GPU providers, with zero data retention. This means your AI assistant conversations stay private, even from Venice themselves.
 
 Venice provides anonymized access to frontier models (Claude Opus, Claude Sonnet) and fully private access to open-source models (GLM, Qwen) through a single API — switch between them anytime.
+
+| | **Venice AI** | **Anthropic (Claude)** | **OpenAI (ChatGPT)** |
+|---|---|---|---|
+| **Data retention** | None — zero logs | 30 days | 30 days |
+| **Prompt privacy** | Encrypted, never stored | Stored for safety | Stored for training (opt-out available) |
+| **Open-source models** | Yes (Llama, Qwen, GLM) | No | No |
+| **Frontier models** | Claude Opus, Sonnet via proxy | Native | GPT-4o, o1 |
+| **Pricing** | Pay-per-token, no subscription | $20/mo Pro or API | $20/mo Plus or API |
+| **Uncensored inference** | Yes (open-source models) | No | No |
+
+### Why NanoClaw over OpenClaw?
+
+[OpenClaw](https://github.com/nicferrier/openclaw) is the original full-featured platform. [NanoClaw](https://github.com/qwibitai/nanoclaw) is a lightweight alternative built for simplicity and real security. This fork adds Venice AI support so everything runs privately without an Anthropic subscription.
+
+| | **NanoClaw (Venice)** | **OpenClaw** |
+|---|---|---|
+| **Codebase** | ~2,000 lines, handful of files | ~500,000 lines, 53 config files |
+| **Dependencies** | ~15 packages | 70+ packages |
+| **Security model** | OS-level Docker container isolation | Application-level allowlists and pairing codes |
+| **Per-group isolation** | Each group gets its own container, filesystem, and memory | Shared process, shared memory |
+| **Setup** | One wizard (`/setup`), ~10 minutes | Manual multi-step configuration |
+| **AI provider** | Venice AI (private, no subscription) | Anthropic (requires API key or subscription) |
+| **Customization** | Edit the code directly — it's small enough to read | Config files and plugins |
+| **Target user** | One person, one bot | Multi-user platform |
 
 ---
 
