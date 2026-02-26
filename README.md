@@ -58,7 +58,7 @@ You need these four things. If you don't have them, the setup wizard will try to
 |------|--------------|--------------------------|
 | **Node.js 20+** | [nodejs.org](https://nodejs.org) or `brew install node` (macOS) | Open Terminal, type `node --version` and press Enter — should show v20 or higher |
 | **Docker** | [docker.com/products/docker-desktop](https://docker.com/products/docker-desktop) — install and **open it once** so it's running | Open Terminal, type `docker info` and press Enter — should show info, not an error |
-| **Claude Code CLI** | [claude.ai/download](https://claude.ai/download) — follow the install instructions for your OS | Open Terminal, type `claude --version` and press Enter — should show a version number |
+| **Claude Code CLI** | Open Terminal, paste `curl -fsSL https://claude.ai/install.sh \| bash` and press Enter | Open Terminal, type `claude --version` and press Enter — should show a version number |
 | **Venice AI API key** | Go to [venice.ai/settings/api](https://venice.ai/settings/api), create an account, generate a key | Copy it somewhere safe — you'll paste it during setup |
 
 **For Telegram** (recommended for first-time users):
