@@ -13,6 +13,7 @@ import { logger } from '../src/logger.js';
 import {
   getPlatform,
   getNodePath,
+  getNpxPath,
   getServiceManager,
   hasSystemd,
   isRoot,
@@ -151,6 +152,9 @@ ${envEntries}
     // launchctl list failed
   }
 
+  // Also set up the Venice proxy as a separate background service
+  setupLaunchdProxy(projectRoot, homeDir, envVars);
+
   emitStatus('SETUP_SERVICE', {
     SERVICE_TYPE: 'launchd',
     NODE_PATH: nodePath,
@@ -160,6 +164,78 @@ ${envEntries}
     STATUS: 'success',
     LOG: 'logs/setup.log',
   });
+}
+
+function setupLaunchdProxy(
+  projectRoot: string,
+  homeDir: string,
+  envVars: Record<string, string>,
+): void {
+  const npxPath = getNpxPath();
+  const nodeBinDir = path.dirname(npxPath);
+  const veniceKey = envVars.VENICE_API_KEY;
+
+  if (!veniceKey) {
+    logger.warn('No VENICE_API_KEY in .env — skipping proxy service');
+    return;
+  }
+
+  const proxyPlistPath = path.join(
+    homeDir, 'Library', 'LaunchAgents', 'com.nanoclaw.venice-proxy.plist',
+  );
+
+  const proxyPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.venice-proxy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${npxPath}</string>
+        <string>tsx</string>
+        <string>proxy/venice-proxy.ts</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>${projectRoot}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>${nodeBinDir}:${homeDir}/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>${homeDir}</string>
+        <key>VENICE_API_KEY</key>
+        <string>${veniceKey}</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>${projectRoot}/logs/venice-proxy.log</string>
+    <key>StandardErrorPath</key>
+    <string>${projectRoot}/logs/venice-proxy.error.log</string>
+</dict>
+</plist>`;
+
+  fs.writeFileSync(proxyPlistPath, proxyPlist);
+  logger.info({ proxyPlistPath }, 'Wrote Venice proxy launchd plist');
+
+  try {
+    execSync(`launchctl load ${JSON.stringify(proxyPlistPath)}`, { stdio: 'ignore' });
+    logger.info('Venice proxy launchctl load succeeded');
+  } catch {
+    logger.warn('Venice proxy launchctl load failed (may already be loaded)');
+  }
+
+  // Verify
+  try {
+    const output = execSync('launchctl list', { encoding: 'utf-8' });
+    const loaded = output.includes('com.nanoclaw.venice-proxy');
+    logger.info({ loaded }, 'Venice proxy service status');
+  } catch {
+    // launchctl list failed
+  }
 }
 
 function setupLinux(projectRoot: string, nodePath: string, homeDir: string): void {
@@ -301,6 +377,9 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
     // Not active
   }
 
+  // Also set up the Venice proxy as a systemd service
+  setupSystemdProxy(projectRoot, homeDir, systemctlPrefix, runningAsRoot);
+
   emitStatus('SETUP_SERVICE', {
     SERVICE_TYPE: runningAsRoot ? 'systemd-system' : 'systemd-user',
     NODE_PATH: nodePath,
@@ -311,6 +390,64 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
     STATUS: 'success',
     LOG: 'logs/setup.log',
   });
+}
+
+function setupSystemdProxy(
+  projectRoot: string,
+  homeDir: string,
+  systemctlPrefix: string,
+  runningAsRoot: boolean,
+): void {
+  const npxPath = getNpxPath();
+  const nodeBinDir = path.dirname(npxPath);
+  const envVars = loadEnvFile(projectRoot);
+  const veniceKey = envVars.VENICE_API_KEY;
+
+  if (!veniceKey) {
+    logger.warn('No VENICE_API_KEY in .env — skipping proxy service');
+    return;
+  }
+
+  let unitPath: string;
+  if (runningAsRoot) {
+    unitPath = '/etc/systemd/system/nanoclaw-venice-proxy.service';
+  } else {
+    const unitDir = path.join(homeDir, '.config', 'systemd', 'user');
+    fs.mkdirSync(unitDir, { recursive: true });
+    unitPath = path.join(unitDir, 'nanoclaw-venice-proxy.service');
+  }
+
+  const unit = `[Unit]
+Description=NanoClaw Venice API Proxy
+After=network.target
+Before=nanoclaw.service
+
+[Service]
+Type=simple
+ExecStart=${npxPath} tsx proxy/venice-proxy.ts
+WorkingDirectory=${projectRoot}
+Restart=always
+RestartSec=3
+Environment=HOME=${homeDir}
+Environment=PATH=${nodeBinDir}:/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin
+Environment=VENICE_API_KEY=${veniceKey}
+StandardOutput=append:${projectRoot}/logs/venice-proxy.log
+StandardError=append:${projectRoot}/logs/venice-proxy.error.log
+
+[Install]
+WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
+
+  fs.writeFileSync(unitPath, unit);
+  logger.info({ unitPath }, 'Wrote Venice proxy systemd unit');
+
+  try {
+    execSync(`${systemctlPrefix} daemon-reload`, { stdio: 'ignore' });
+    execSync(`${systemctlPrefix} enable nanoclaw-venice-proxy`, { stdio: 'ignore' });
+    execSync(`${systemctlPrefix} start nanoclaw-venice-proxy`, { stdio: 'ignore' });
+    logger.info('Venice proxy systemd service started');
+  } catch (err) {
+    logger.warn({ err }, 'Failed to start Venice proxy systemd service');
+  }
 }
 
 function setupNohupFallback(projectRoot: string, nodePath: string, homeDir: string): void {

@@ -71,9 +71,7 @@ You need these four things. If you don't have them, the setup wizard will try to
 
 ## Setup (Step by Step)
 
-The whole setup takes about 10 minutes. You'll need **two Terminal windows** open side by side.
-
-> **Tip:** On macOS you can open a second Terminal window with **Cmd + N**. On Linux, use **Ctrl + Shift + N** or open a new tab.
+The whole setup takes about 10 minutes. You only need **one Terminal window**.
 
 ### Step 1: Clone and install
 
@@ -87,46 +85,21 @@ npm install
 
 Wait for `npm install` to finish. You should see "added X packages" with no errors.
 
-### Step 2: Start the Venice proxy
+### Step 2: Launch Claude Code with Venice
 
-Still in the **same Terminal window** from Step 1 (you should still be inside the `nanoclaw-venice` folder).
-
-The proxy is a small local server that translates between Claude Code and Venice AI. It needs to stay running the whole time.
-
-Replace `your-key` below with your actual Venice API key (the one from [venice.ai/settings/api](https://venice.ai/settings/api)), then paste it into Terminal and press Enter:
+Still in the **same Terminal window**, paste this and press Enter:
 
 ```bash
-VENICE_API_KEY=your-key npm run proxy
-```
-
-You should see:
-```
-Venice API proxy listening on http://localhost:4001
-Forwarding to: https://api.venice.ai/api/v1
-```
-
-**Leave this terminal window open.** Don't close it or press anything — the proxy needs to keep running.
-
-> **If the proxy crashes:** It can occasionally crash on connection errors. Just run the same command again. See [Troubleshooting](#troubleshooting) for a more stable option using pm2.
-
-### Step 3: Launch Claude Code (in a new Terminal window)
-
-Open a **second Terminal window** (Cmd + N on macOS, Ctrl + Shift + N on Linux). **Don't close the first one** — the proxy needs to keep running in it.
-
-Paste these two commands into the **new** Terminal window and press Enter:
-
-```bash
-cd nanoclaw-venice
 ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude
 ```
 
 Claude Code will start up. It may ask "Do you want to use this API key?" — **select Yes**.
 
-> **Important:** The `cd nanoclaw-venice` command tells Terminal to go into the project folder. You must run this first, otherwise the `/setup` command in the next step won't appear.
+> **Important:** You must be inside the `nanoclaw-venice` folder for the `/setup` command to appear in the next step.
 
-### Step 4: Run the setup wizard
+### Step 3: Run the setup wizard
 
-In your **second Terminal window** (the one running Claude Code), type this and press Enter:
+In your Terminal window (the one running Claude Code), type this and press Enter:
 
 ```
 /setup
@@ -142,11 +115,17 @@ The wizard will walk you through everything automatically:
 6. **Telegram setup** — the wizard will ask you to send a message to your bot so it can detect your chat automatically
 7. **Trigger word** — what prefix activates the bot (default: `@Andy`). Your main channel won't need the prefix
 8. **Mount directories** — pick "No" for now. You can add external directory access later
-9. **Start service** — NanoClaw starts running in the background
+9. **Start services** — NanoClaw and the Venice proxy both start as background services
+
+The setup wizard installs two background services:
+- **NanoClaw** — the bot itself
+- **Venice proxy** — a small local server (localhost:4001) that translates between Claude Code and Venice AI
+
+Both start automatically on boot and restart themselves if they crash. No terminal window needed.
 
 > **If the wizard stops between steps:** Type "continue" or "next step" to nudge it forward. This can happen with some models.
 
-### Step 5: Talk to your bot
+### Step 4: Talk to your bot
 
 Once setup is complete, open your chat (Telegram or WhatsApp) and send:
 
@@ -156,7 +135,7 @@ Once setup is complete, open your chat (Telegram or WhatsApp) and send:
 
 The bot should respond within a few seconds. If this is your main channel, you can just type normally without the `@Andy` prefix.
 
-**You can now close both terminal windows.** The bot runs as a background service and starts automatically when your computer boots.
+**You can now close the terminal window.** Everything runs as background services and starts automatically when your computer boots.
 
 ---
 
@@ -183,71 +162,55 @@ This is the AI that responds to your messages in Telegram/WhatsApp. It runs insi
 
 ## Troubleshooting
 
-### The proxy crashed
+### The proxy isn't running
 
-The proxy can occasionally crash on connection errors. To restart it:
+The Venice proxy runs as a background service and restarts itself automatically. If it's not working:
 
-1. Open **Terminal** (or find the Terminal window that was running the proxy — it may show an error)
-2. Paste these two commands and press Enter:
-   ```bash
-   cd nanoclaw-venice
-   VENICE_API_KEY=your-key npm run proxy
-   ```
-   (Replace `your-key` with your actual Venice API key)
-3. You should see `Venice API proxy listening on http://localhost:4001` — that means it's working again
-4. **Leave this Terminal window open** — the proxy needs to keep running
-
-**Tired of restarting the proxy manually?** You can install pm2, a tool that automatically restarts the proxy if it crashes. Open Terminal and paste:
-
+**macOS:**
 ```bash
-npm install -g pm2
+# Check if it's running
+launchctl list | grep venice-proxy
+
+# Restart it
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw.venice-proxy
+
+# Check logs
+tail -f ~/nanoclaw-venice/logs/venice-proxy.log
 ```
 
-Then start the proxy through pm2 (replace `your-key` with your Venice API key):
-
+**Linux:**
 ```bash
-cd nanoclaw-venice
-VENICE_API_KEY=your-key pm2 start "npx tsx proxy/venice-proxy.ts" --name venice-proxy
+# Check if it's running
+systemctl --user status nanoclaw-venice-proxy
+
+# Restart it
+systemctl --user restart nanoclaw-venice-proxy
+
+# Check logs
+tail -f ~/nanoclaw-venice/logs/venice-proxy.log
 ```
-
-Now you can close the Terminal window — pm2 keeps the proxy running in the background and restarts it automatically if it crashes. Here are some useful pm2 commands you can paste into Terminal anytime:
-
-| What you want to do | Command (paste into Terminal) |
-|---------------------|------|
-| Check if the proxy is running | `pm2 status` |
-| View proxy logs | `pm2 logs venice-proxy` |
-| Restart the proxy | `pm2 restart venice-proxy` |
-| Stop the proxy | `pm2 stop venice-proxy` |
 
 ### Claude Code says "Please run /login" or shows a 403 error
 
-This means Claude Code can't connect to the Venice proxy. Here's how to fix it:
+This means Claude Code can't connect to the Venice proxy. Check that the proxy service is running (see above), then try:
 
-1. **Check the proxy is running.** Look at the Terminal window where you started the proxy (Step 2 of setup). It should still show `Venice API proxy listening on http://localhost:4001`. If the window is closed or shows an error, restart the proxy (see above).
-
-2. **Make sure you're in the right folder.** Open a **new Terminal window** and paste:
+1. **Make sure you're in the right folder.** Open Terminal and paste:
    ```bash
    cd nanoclaw-venice
    ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude
    ```
-   The `cd nanoclaw-venice` part is critical — Claude Code won't work if you skip it.
 
-3. **Still not working?** Close all Terminal windows and start fresh:
-   - Open Terminal, paste `cd nanoclaw-venice && VENICE_API_KEY=your-key npm run proxy` (replace `your-key`)
-   - Open a second Terminal window (Cmd + N on macOS), paste `cd nanoclaw-venice && ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude`
+2. **Still not working?** Restart the proxy service (see above) and try again.
 
 ### Model errors ("model does not exist")
 
-This means the bot tried to use a model that Venice doesn't have. This shouldn't happen with normal use — the proxy translates model names automatically. To fix it:
+This means the bot tried to use a model that Venice doesn't have. The proxy translates model names automatically, so this shouldn't happen with normal use. To fix it:
 
-1. **Restart the proxy.** Open Terminal and paste:
-   ```bash
-   cd nanoclaw-venice
-   VENICE_API_KEY=your-key npm run proxy
-   ```
-   (Or if you're using pm2: paste `pm2 restart venice-proxy` into Terminal)
+1. **Restart the proxy:**
+   - macOS: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw.venice-proxy`
+   - Linux: `systemctl --user restart nanoclaw-venice-proxy`
 
-2. **Restart the bot.** Open a new Terminal window and paste:
+2. **Restart the bot:**
    - macOS: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
    - Linux: `systemctl --user restart nanoclaw`
 
@@ -319,21 +282,23 @@ Available Venice models include `claude-opus-4-6`, `claude-sonnet-4-6`, `zai-org
 
 ## Using Claude Code Through Venice (No Bot)
 
-If you just want to use Claude Code with Venice AI and don't need the WhatsApp/Telegram bot:
+If you just want to use Claude Code with Venice AI and don't need the WhatsApp/Telegram bot, the proxy service needs to be running. If you've already run `/setup`, it's already running as a background service.
 
-Open **Terminal** and paste (replace `your-key` with your Venice API key):
-```bash
-cd nanoclaw-venice
-VENICE_API_KEY=your-key npm run proxy
-```
-
-Leave that running. Open a **second Terminal window** (Cmd + N on macOS) and paste:
+To start a Claude Code session through Venice, open **Terminal** and paste:
 ```bash
 cd nanoclaw-venice
 ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude
 ```
 
-That's it. You now have Claude Code running through Venice.
+That's it. The proxy is already running in the background.
+
+**Tip:** Add this to your `~/.zshrc` (or `~/.bashrc`) so you can quickly switch any terminal to Venice:
+```bash
+alias venice='export ANTHROPIC_BASE_URL=http://localhost:4001 && export ANTHROPIC_API_KEY=venice-proxy && echo "Using Venice API"'
+alias anthropic='unset ANTHROPIC_BASE_URL && unset ANTHROPIC_API_KEY && echo "Using Anthropic API"'
+```
+
+Then just type `venice` in any terminal before running `claude` to use Venice, or `anthropic` to switch back to your Anthropic subscription.
 
 ---
 
@@ -348,9 +313,9 @@ If you want the bot to be able to read or edit files on your machine (for exampl
 - **During setup:** When the wizard asks about directory access, choose "Yes" and tell it which folders to share
 - **After setup:** Open the Claude Code admin tool (see [How It Works](#how-it-works-the-two-layers)) and run `/customize` to change what the bot can access
 
-### Manually starting and stopping the bot
+### Manually starting and stopping services
 
-The bot runs as a background service — it starts automatically when your computer boots. If you ever need to manually start, stop, or restart it, open Terminal and paste the command for your system:
+NanoClaw runs two background services that start automatically on boot. If you ever need to manually manage them:
 
 **macOS:**
 | Action | Command (paste into Terminal) |
@@ -358,6 +323,9 @@ The bot runs as a background service — it starts automatically when your compu
 | Start the bot | `launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist` |
 | Stop the bot | `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist` |
 | Restart the bot | `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` |
+| Start the proxy | `launchctl load ~/Library/LaunchAgents/com.nanoclaw.venice-proxy.plist` |
+| Stop the proxy | `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.venice-proxy.plist` |
+| Restart the proxy | `launchctl kickstart -k gui/$(id -u)/com.nanoclaw.venice-proxy` |
 
 **Linux:**
 | Action | Command (paste into Terminal) |
@@ -365,6 +333,9 @@ The bot runs as a background service — it starts automatically when your compu
 | Start the bot | `systemctl --user start nanoclaw` |
 | Stop the bot | `systemctl --user stop nanoclaw` |
 | Restart the bot | `systemctl --user restart nanoclaw` |
+| Start the proxy | `systemctl --user start nanoclaw-venice-proxy` |
+| Stop the proxy | `systemctl --user stop nanoclaw-venice-proxy` |
+| Restart the proxy | `systemctl --user restart nanoclaw-venice-proxy` |
 
 ### Running multiple bots on the same computer
 
