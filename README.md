@@ -90,8 +90,10 @@ Wait for `npm install` to finish. You should see "added X packages" with no erro
 Still in the **same Terminal window**, paste this and press Enter:
 
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude
+VENICE_API_KEY=your-key npm run venice
 ```
+
+Replace `your-key` with your actual Venice API key (the one from [venice.ai/settings/api](https://venice.ai/settings/api)). This starts the Venice proxy and launches Claude Code through it in a single command.
 
 Claude Code will start up. It may ask "Do you want to use this API key?" — **select Yes**.
 
