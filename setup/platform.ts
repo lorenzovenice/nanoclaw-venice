@@ -104,6 +104,16 @@ export function getNodePath(): string {
   }
 }
 
+export function getNpxPath(): string {
+  try {
+    return execSync('command -v npx', { encoding: 'utf-8' }).trim();
+  } catch {
+    // Fallback: npx is usually next to node
+    const nodePath = getNodePath();
+    return nodePath.replace(/\/node$/, '/npx');
+  }
+}
+
 export function commandExists(name: string): boolean {
   try {
     execSync(`command -v ${name}`, { stdio: 'ignore' });
