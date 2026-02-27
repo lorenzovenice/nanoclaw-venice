@@ -35,7 +35,7 @@ const MODEL_MAP: Record<string, string> = {
 
 function mapModel(model: string): string {
   if (MODEL_MAP[model]) {
-    console.log(`[proxy] model remap: ${model} → ${MODEL_MAP[model]}`);
+    if (process.env.VENICE_PROXY_DEBUG) console.log(`[proxy] model remap: ${model} → ${MODEL_MAP[model]}`);
     return MODEL_MAP[model];
   }
   return model;
@@ -205,12 +205,21 @@ function translateRequest(body: AnthropicRequest): Record<string, unknown> {
   // User/assistant messages
   openaiMessages.push(...translateMessages(body.messages));
 
+  const mappedModel = mapModel(body.model);
+
+  // Venice requires thinking.budget_tokens >= 1024 for Claude models
+  const isClaudeModel = mappedModel.startsWith('claude');
+  const maxTokens = isClaudeModel ? Math.max(body.max_tokens, 4096) : body.max_tokens;
+
   const openaiReq: Record<string, unknown> = {
-    model: mapModel(body.model),
+    model: mappedModel,
     messages: openaiMessages,
-    max_tokens: body.max_tokens,
+    max_tokens: maxTokens,
     stream: body.stream || false,
-    venice_parameters: { include_venice_system_prompt: false },
+    venice_parameters: {
+      include_venice_system_prompt: false,
+      ...(isClaudeModel ? { thinking: { budget_tokens: 1024 } } : {}),
+    },
   };
 
   if (body.temperature != null) openaiReq.temperature = body.temperature;
@@ -566,7 +575,7 @@ function forwardToVenice(
 
 const server = http.createServer(async (req, res) => {
   const url = req.url || '/';
-  console.log(`[proxy] ${req.method} ${url}`);
+  if (process.env.VENICE_PROXY_DEBUG) console.log(`[proxy] ${req.method} ${url}`);
 
   // Collect request body
   const bodyChunks: Buffer[] = [];
@@ -587,7 +596,7 @@ const server = http.createServer(async (req, res) => {
 
       const requestId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-      console.log(`[proxy] ${requestModel} → ${openaiReq.model} (stream=${isStreaming}, body=${openaiBody.length} bytes)`);
+      if (process.env.VENICE_PROXY_DEBUG) console.log(`[proxy] ${requestModel} → ${openaiReq.model} (stream=${isStreaming}, body=${openaiBody.length} bytes)`);
 
       if (isStreaming) {
         // Streaming: pipe SSE chunks through translator
@@ -610,7 +619,7 @@ const server = http.createServer(async (req, res) => {
           // If Venice returned a non-200, the translator may not have sent
           // a proper message_stop. Ensure the stream is properly terminated.
           if (streamResp.statusCode !== 200 && !res.writableEnded) {
-            console.error(`[proxy] Venice streaming returned HTTP ${streamResp.statusCode}: ${streamResp.body.toString().slice(0, 500)}`);
+            if (process.env.VENICE_PROXY_DEBUG) console.error(`[proxy] Venice streaming returned HTTP ${streamResp.statusCode}: ${streamResp.body.toString().slice(0, 500)}`);
             const errorEvent = {
               type: 'error',
               error: { type: 'api_error', message: `Venice API returned HTTP ${streamResp.statusCode}` },
@@ -619,7 +628,7 @@ const server = http.createServer(async (req, res) => {
             res.end();
           }
         } catch (err) {
-          console.error('[proxy] Venice streaming error:', err);
+          if (process.env.VENICE_PROXY_DEBUG) console.error('[proxy] Venice streaming error:', err);
           if (!res.writableEnded) {
             const errorEvent = {
               type: 'error',
@@ -639,7 +648,7 @@ const server = http.createServer(async (req, res) => {
         );
 
         if (veniceResp.statusCode !== 200) {
-          console.error(`[proxy] Venice returned HTTP ${veniceResp.statusCode}: ${veniceResp.body.toString().slice(0, 500)}`);
+          if (process.env.VENICE_PROXY_DEBUG) console.error(`[proxy] Venice returned HTTP ${veniceResp.statusCode}: ${veniceResp.body.toString().slice(0, 500)}`);
           // Translate Venice/OpenAI error format to Anthropic error format
           let errorMessage = `Venice API error (HTTP ${veniceResp.statusCode})`;
           let errorType = 'api_error';
@@ -677,7 +686,7 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify(anthropicResp));
       }
     } catch (err) {
-      console.error('[proxy] Translation error:', err);
+      if (process.env.VENICE_PROXY_DEBUG) console.error('[proxy] Translation error:', err);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         type: 'error',
@@ -703,7 +712,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(veniceResp.statusCode, { 'Content-Type': 'application/json' });
     res.end(veniceResp.body);
   } catch (err) {
-    console.error('[proxy] Passthrough error:', err);
+    if (process.env.VENICE_PROXY_DEBUG) console.error('[proxy] Passthrough error:', err);
     res.writeHead(502, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: `Proxy error: ${err}` }));
   }
@@ -718,9 +727,8 @@ process.on('unhandledRejection', (err) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Venice API proxy listening on http://localhost:${PORT}`);
-  console.log(`Forwarding to: ${VENICE_BASE_URL}`);
+  console.log(`Venice proxy → localhost:${PORT}`);
   if (process.env.VENICE_PROXY_DEBUG) {
-    console.log('Debug logging enabled (VENICE_PROXY_DEBUG=1)');
+    console.log(`Forwarding to: ${VENICE_BASE_URL} (debug logging enabled)`);
   }
 });
