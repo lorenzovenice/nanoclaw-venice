@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc",
     "proxy": "tsx proxy/venice-proxy.ts",
-    "venice": "bash -c 'npx tsx proxy/venice-proxy.ts & PROXY_PID=$!; sleep 1; ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude --model zai-org-glm-5; kill $PROXY_PID 2>/dev/null'",
+    "venice": "bash -c 'if ! lsof -i :4001 -sTCP:LISTEN >/dev/null 2>&1; then nohup npx tsx proxy/venice-proxy.ts > logs/venice-proxy.log 2>&1 & sleep 1; fi; ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude --model zai-org-glm-5'",
     "start": "npx concurrently --kill-others \"npx tsx proxy/venice-proxy.ts\" \"node dist/index.js\"",
     "dev": "npx concurrently --kill-others \"npm run proxy\" \"tsx src/index.ts\"",
     "auth": "tsx src/whatsapp-auth.ts",
