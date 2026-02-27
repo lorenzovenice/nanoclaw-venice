@@ -48,11 +48,65 @@ interface SessionsIndex {
   entries: SessionEntry[];
 }
 
+type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
 interface SDKUserMessage {
   type: 'user';
-  message: { role: 'user'; content: string };
+  message: { role: 'user'; content: string | ContentBlock[] };
   parent_tool_use_id: null;
   session_id: string;
+}
+
+const IMAGE_TAG_RE = /\[Image:\s*([^\]]+)\]/g;
+const SUPPORTED_MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
+/**
+ * Convert a text prompt that may contain [Image: /path] tags into
+ * multimodal content blocks. Images are read from disk and inlined as base64.
+ */
+function buildContent(text: string): string | ContentBlock[] {
+  const matches = [...text.matchAll(IMAGE_TAG_RE)];
+  if (matches.length === 0) return text;
+
+  const blocks: ContentBlock[] = [];
+  let lastIndex = 0;
+
+  for (const match of matches) {
+    // Add text before this image tag
+    const before = text.slice(lastIndex, match.index).trim();
+    if (before) blocks.push({ type: 'text', text: before });
+
+    const imagePath = match[1].trim();
+    try {
+      const data = fs.readFileSync(imagePath);
+      const ext = path.extname(imagePath).toLowerCase();
+      const mediaType = SUPPORTED_MIME[ext] || 'image/jpeg';
+      blocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: mediaType, data: data.toString('base64') },
+      });
+      log(`Inlined image: ${imagePath} (${data.length} bytes, ${mediaType})`);
+    } catch (err) {
+      log(`Failed to read image ${imagePath}: ${err instanceof Error ? err.message : String(err)}`);
+      blocks.push({ type: 'text', text: `[Image not found: ${imagePath}]` });
+    }
+
+    lastIndex = match.index! + match[0].length;
+  }
+
+  // Add any trailing text
+  const after = text.slice(lastIndex).trim();
+  if (after) blocks.push({ type: 'text', text: after });
+
+  return blocks;
 }
 
 const IPC_INPUT_DIR = '/workspace/ipc/input';
@@ -71,7 +125,7 @@ class MessageStream {
   push(text: string): void {
     this.queue.push({
       type: 'user',
-      message: { role: 'user', content: text },
+      message: { role: 'user', content: buildContent(text) },
       parent_tool_use_id: null,
       session_id: '',
     });
