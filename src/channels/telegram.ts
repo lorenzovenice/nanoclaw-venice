@@ -1,6 +1,9 @@
+import fs from 'fs';
+import path from 'path';
+
 import { Bot } from 'grammy';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, GROUPS_DIR, TRIGGER_PATTERN } from '../config.js';
 import { logger } from '../logger.js';
 import {
   Channel,
@@ -219,7 +222,65 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const timestamp = new Date(ctx.message.date * 1000).toISOString();
+      const senderName =
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+      const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+
+      // Download the highest-resolution photo
+      let imagePath = '';
+      try {
+        const photos = ctx.message.photo;
+        const largest = photos[photos.length - 1];
+        const file = await ctx.api.getFile(largest.file_id);
+        const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const buffer = Buffer.from(await resp.arrayBuffer());
+
+        const ext = path.extname(file.file_path || '.jpg') || '.jpg';
+        const filename = `${ctx.message.message_id}-${Date.now()}${ext}`;
+        const imagesDir = path.join(GROUPS_DIR, group.folder, 'images');
+        fs.mkdirSync(imagesDir, { recursive: true });
+        fs.writeFileSync(path.join(imagesDir, filename), buffer);
+        imagePath = `/workspace/group/images/${filename}`;
+      } catch (err) {
+        logger.error({ err, chatJid }, 'Failed to download Telegram photo');
+      }
+
+      const content = imagePath
+        ? `${caption}\n[Image: ${imagePath}]`.trim()
+        : `[Photo]${caption}`;
+
+      const chatName =
+        ctx.chat.type === 'private'
+          ? (ctx.from?.first_name || 'Private')
+          : (ctx.chat as any).title || chatJid;
+      const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(chatJid, timestamp, chatName, 'telegram', isGroup);
+      this.opts.onMessage(chatJid, {
+        id: ctx.message.message_id.toString(),
+        chat_jid: chatJid,
+        sender: ctx.from?.id?.toString() || '',
+        sender_name: senderName,
+        content,
+        timestamp,
+        is_from_me: false,
+      });
+
+      logger.info(
+        { chatJid, chatName: chatName, sender: senderName, hasImage: !!imagePath },
+        'Telegram photo message stored',
+      );
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) =>
       storeNonText(ctx, '[Voice message]'),
