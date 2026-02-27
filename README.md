@@ -71,7 +71,7 @@ You need these four things. If you don't have them, the setup wizard will try to
 
 > **⚠️ IMPORTANT: Do NOT use your personal phone number for WhatsApp.**
 >
-> WhatsApp only allows one client per number. When NanoClaw connects, it **takes over that number's WhatsApp session** — you will be logged out of your regular WhatsApp on your phone. Your personal chats, groups, message history, and notifications will stop working until you reclaim the number.
+> NanoClaw connects as a linked device on your WhatsApp number. That means **the agent can see every message coming in and going out** — all your personal conversations, group chats, photos, everything. Your phone still works normally, but the bot has full visibility into your entire WhatsApp account.
 >
 > **Use a virtual phone number instead.** These apps give you a second number that you can dedicate entirely to the bot:
 >
