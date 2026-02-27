@@ -8,9 +8,12 @@ description: Run initial NanoClaw (Venice API) setup. Use when user wants to ins
 ## CRITICAL RULES — Read Before Anything
 
 1. **NEVER stop between steps.** After each successful step, IMMEDIATELY run the next step's command. Do NOT summarize, do NOT ask "should I continue?", do NOT wait for input unless a step explicitly requires it (marked with AskUserQuestion below).
-2. **Fix problems yourself.** If something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their physical action (scanning a QR code, pasting a secret they have). If a dependency is missing, install it. If a service won't start, diagnose and repair.
-3. **Use AskUserQuestion for ALL user questions.** Never use a bare text prompt — always use the AskUserQuestion tool so the user gets clickable options.
-4. **The proxy is already running.** The user started the Venice proxy before launching Claude Code. You do NOT need to start it. If you need to test connectivity, use `curl http://localhost:4001/v1/models`.
+2. **After every AskUserQuestion answer, IMMEDIATELY run the next command.** When you receive an answer from the user, execute the corresponding command on the very next action. Never summarize the answer, never confirm, never pause.
+3. **Fix problems yourself.** If something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their physical action (scanning a QR code, pasting a secret they have). If a dependency is missing, install it. If a service won't start, diagnose and repair.
+4. **NEVER run sudo commands without asking first.** Always use AskUserQuestion to get explicit permission before running any command that requires root/sudo access.
+5. **If a step fails twice, STOP and ask the user.** Do not retry the same command more than twice. If it fails twice, use AskUserQuestion to present the error and ask how to proceed. Do NOT enter retry loops.
+6. **Use AskUserQuestion for ALL user questions.** Never use a bare text prompt — always use the AskUserQuestion tool so the user gets clickable options.
+7. **The proxy is already running.** The user started the Venice proxy before launching Claude Code. You do NOT need to start it. If you need to test connectivity, use `curl http://localhost:4001/v1/models`.
 
 Setup uses `bash setup.sh` for bootstrap, then `npx tsx setup/index.ts --step <name>` for all other steps. Steps emit structured status blocks to stdout. Verbose logs go to `logs/setup.log`.
 
@@ -45,10 +48,10 @@ Run `npx tsx setup/index.ts --step venice -- --key <KEY>` and parse the status b
 
 AskUserQuestion: "Which messaging channel do you want to use?" with options: WhatsApp, Telegram, Both
 
-If Telegram or Both:
-  AskUserQuestion: "Enter your Telegram bot token (create one with @BotFather on Telegram: https://t.me/BotFather)"
-
-Run `npx tsx setup/index.ts --step channels -- --channel <whatsapp|telegram|both> [--telegram-token TOKEN]`
+When the user answers:
+- If **WhatsApp** → IMMEDIATELY run: `npx tsx setup/index.ts --step channels -- --channel whatsapp`
+- If **Telegram** → AskUserQuestion: "Enter your Telegram bot token (create one with @BotFather on Telegram: https://t.me/BotFather)". When the user provides the token, IMMEDIATELY run: `npx tsx setup/index.ts --step channels -- --channel telegram --telegram-token TOKEN`
+- If **Both** → AskUserQuestion: "Enter your Telegram bot token (create one with @BotFather on Telegram: https://t.me/BotFather)". When the user provides the token, IMMEDIATELY run: `npx tsx setup/index.ts --step channels -- --channel both --telegram-token TOKEN`
 
 **On success → immediately run step 4.**
 
@@ -65,9 +68,9 @@ Run `npx tsx setup/index.ts --step environment` and parse the status block.
 
 ### 5a. Choose runtime
 
-- PLATFORM=linux → Docker (only option)
-- PLATFORM=macos + APPLE_CONTAINER=installed → AskUserQuestion: "Docker (default) or Apple Container (native macOS)?" If Apple Container → run `/convert-to-apple-container` first.
-- Otherwise → Docker (default)
+- PLATFORM=linux → Docker (only option). IMMEDIATELY proceed to step 5b.
+- PLATFORM=macos + APPLE_CONTAINER=installed → AskUserQuestion: "Docker (default) or Apple Container (native macOS)?" When the user answers: if Apple Container → run `/convert-to-apple-container` first, then proceed to step 5c. If Docker → IMMEDIATELY proceed to step 5b.
+- Otherwise → Docker (default). IMMEDIATELY proceed to step 5b.
 
 ### 5b. Install Docker if needed
 
@@ -96,10 +99,12 @@ Choose auth method:
 - Headless (not WSL) → AskUserQuestion: Pairing code (recommended) vs QR terminal
 - Desktop (macOS, Linux, WSL) → AskUserQuestion: QR browser (recommended) vs pairing code vs QR terminal
 
-Commands (all with Bash timeout: 150000ms):
-- QR browser: `npx tsx setup/index.ts --step whatsapp-auth -- --method qr-browser`
-- Pairing code: ask phone number first, then `npx tsx setup/index.ts --step whatsapp-auth -- --method pairing-code --phone NUMBER`
-- QR terminal: `npx tsx setup/index.ts --step whatsapp-auth -- --method qr-terminal`
+When the user answers, IMMEDIATELY run the corresponding command (all with Bash timeout: 150000ms):
+- **QR browser** → IMMEDIATELY run: `npx tsx setup/index.ts --step whatsapp-auth -- --method qr-browser`
+- **Pairing code** → AskUserQuestion: "Enter your phone number (with country code, e.g. +1234567890)". When the user provides the number, IMMEDIATELY run: `npx tsx setup/index.ts --step whatsapp-auth -- --method pairing-code --phone NUMBER`
+- **QR terminal** → IMMEDIATELY run: `npx tsx setup/index.ts --step whatsapp-auth -- --method qr-terminal`
+
+If the output contains `AUTH_STATUS: pairing_code_ready` or `STATUS: waiting`: display the pairing code to the user and tell them to enter it in WhatsApp. The process will emit `STATUS: success` when authenticated.
 
 **On success → immediately run step 7.**
 
@@ -111,9 +116,8 @@ AskUserQuestion: "What trigger word should activate the bot? (default: @Andy)"
 
 **IMPORTANT: The bot is NOT running yet, so `/chatid` will not work.** Instead, get the chat ID using the Telegram Bot API directly:
 
-1. Ask the user: "Send any message (like 'hello') to your bot on Telegram, then tell me when you've done it."
-2. Wait for the user to confirm they sent a message.
-3. Fetch the chat ID using the bot token from `.env`:
+1. AskUserQuestion: "Send any message (like 'hello') to your bot on Telegram, then come back here." with option: "Done, I sent it"
+2. When the user confirms, IMMEDIATELY fetch the chat ID using the bot token from `.env`:
    ```bash
    source .env && curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" | node -e "const d=require('fs').readFileSync('/dev/stdin','utf8');const j=JSON.parse(d);const r=j.result||[];if(r.length===0){console.log('NO_MESSAGES')}else{r.forEach(u=>{if(u.message)console.log('tg:'+u.message.chat.id)})}"
    ```
@@ -151,8 +155,9 @@ AskUserQuestion: "Should the bot have access to any directories on your computer
 - **No, keep it sandboxed (recommended)** — the bot only accesses its own memory. You can add directories later.
 - **Yes, I want to give it access to specific directories**
 
-**No:** `npx tsx setup/index.ts --step mounts -- --empty`
-**Yes:** Collect paths/permissions. `npx tsx setup/index.ts --step mounts -- --json '{"allowedRoots":[...],"blockedPatterns":[],"nonMainReadOnly":true}'`
+When the user answers:
+- **No** → IMMEDIATELY run: `npx tsx setup/index.ts --step mounts -- --empty`
+- **Yes** → AskUserQuestion: "Enter the directory paths to share (comma-separated, e.g. /Users/me/projects, /Users/me/documents)". When the user provides paths, IMMEDIATELY run: `npx tsx setup/index.ts --step mounts -- --json '{"allowedRoots":[{"path":"PATH","readOnly":false}],"blockedPatterns":[],"nonMainReadOnly":true}'` (create one entry per path provided)
 
 **On success → immediately run step 10.**
 
