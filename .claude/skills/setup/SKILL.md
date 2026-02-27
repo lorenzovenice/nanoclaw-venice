@@ -192,6 +192,8 @@ Tell the user setup is complete. Give them these instructions:
 2. The bot should respond within a few seconds.
 3. You can close both terminal windows — the bot runs in the background automatically.
 
+**About your model:** Setup ran on GLM 5 (`zai-org-glm-5`) to keep costs low. For best performance going forward, switch to a frontier model by typing `/model` and selecting `claude-sonnet-4-6` or `claude-opus-4-6`. You can switch back anytime.
+
 If the bot doesn't respond, check the logs: tail -f logs/nanoclaw.log"
 
 ---

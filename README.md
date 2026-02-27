@@ -116,6 +116,8 @@ VENICE_API_KEY=your-key npm run venice
 
 Replace `your-key` with your actual Venice API key (the one from [venice.ai/settings/api](https://venice.ai/settings/api)). This starts the Venice proxy and launches Claude Code through it in a single command.
 
+> **Note:** Claude Code defaults to **GLM 5** (`zai-org-glm-5`) to keep setup costs low. After setup, type `/model` inside Claude Code to switch to `claude-sonnet-4-6` or `claude-opus-4-6` for best performance.
+
 Claude Code will start up. It may ask "Do you want to use this API key?" — **select Yes**.
 
 > **Important:** You must be inside the `nanoclaw-venice` folder for the `/setup` command to appear in the next step.
@@ -297,7 +299,9 @@ Your WhatsApp session can expire if you haven't used the bot in a while. To reco
 | Context | Default Model | How to switch |
 |---------|--------------|---------------|
 | Bot (in chat) | `claude-sonnet-4-6` | Tell the bot: "switch to opus" or "use zai-org-glm-5" |
-| Claude Code CLI | `claude-opus-4-6` | Use `/model` in Claude Code or `claude --model <name>` |
+| Claude Code CLI | `zai-org-glm-5` (GLM 5) | Use `/model` in Claude Code or `claude --model <name>` |
+
+> **Tip:** The CLI defaults to GLM 5 to keep setup costs low. After setup, switch to `claude-sonnet-4-6` or `claude-opus-4-6` for best performance.
 
 Available Venice models include `claude-opus-4-6`, `claude-sonnet-4-6`, `zai-org-glm-5`, and more. See the full list at [docs.venice.ai/models/overview](https://docs.venice.ai/models/overview).
 
