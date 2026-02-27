@@ -67,6 +67,27 @@ You need these four things. If you don't have them, the setup wizard will try to
 3. Follow the prompts — pick a name and username for your bot
 4. BotFather will give you a **token** (looks like `123456789:ABCdef...`) — save it, you'll need it during setup
 
+**For WhatsApp — use a virtual number, NOT your personal one:**
+
+> **⚠️ IMPORTANT: Do NOT use your personal phone number for WhatsApp.**
+>
+> WhatsApp only allows one client per number. When NanoClaw connects, it **takes over that number's WhatsApp session** — you will be logged out of your regular WhatsApp on your phone. Your personal chats, groups, message history, and notifications will stop working until you reclaim the number.
+>
+> **Use a virtual phone number instead.** These apps give you a second number that you can dedicate entirely to the bot:
+>
+> | App | Price | Notes |
+> |-----|-------|-------|
+> | [Hushed](https://hushed.com) | ~$5/mo | Reliable, works well for WhatsApp verification |
+> | [Burner](https://www.burnerapp.com) | ~$5/mo | Similar to Hushed, disposable numbers |
+> | [Google Voice](https://voice.google.com) | Free | US-only, may not work for WhatsApp verification in all cases |
+>
+> **How to set it up:**
+> 1. Get a virtual number from one of the apps above
+> 2. Install WhatsApp on a second device (old phone, tablet, or emulator) using that virtual number
+> 3. During NanoClaw setup, scan the QR code with that second device — not your personal phone
+>
+> This keeps your personal WhatsApp completely untouched. The bot gets its own number, its own WhatsApp account, and its own session.
+
 ---
 
 ## Setup (Step by Step)
