@@ -1,0 +1,5 @@
+{
+  "defaultModel": "claude-sonnet-4-6",
+  "fastModel": "claude-sonnet-4-6",
+  "powerModel": "claude-opus-4-6"
+}

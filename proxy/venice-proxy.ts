@@ -5,6 +5,12 @@
  * Accepts Anthropic Messages API requests, translates them to OpenAI Chat
  * Completions format, forwards to Venice, and translates the response back.
  *
+ * Features:
+ * - HTTPS connection pooling (keep-alive) for reduced latency
+ * - Multi-model routing via pluggable model-router
+ * - Per-request diagnostic logging (latency, tokens, model)
+ * - Robust streaming SSE translation with proper chunk reassembly
+ *
  * Usage:
  *   VENICE_API_KEY=your-key tsx proxy/venice-proxy.ts
  *
@@ -12,6 +18,7 @@
  */
 import http from 'http';
 import https from 'https';
+import { routeModel, notifyRequestComplete, setRoutingConfig, type AnthropicRequest } from './model-router.js';
 
 const VENICE_BASE_URL = process.env.VENICE_BASE_URL || 'https://api.venice.ai/api/v1';
 const VENICE_API_KEY = process.env.VENICE_API_KEY || '';
@@ -22,23 +29,38 @@ if (!VENICE_API_KEY) {
   process.exit(1);
 }
 
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 60_000,
+});
+
 // Map Anthropic model IDs that Venice doesn't have to Venice equivalents
 const MODEL_MAP: Record<string, string> = {
-  // Haiku → Sonnet (Venice doesn't have Haiku)
   'claude-haiku-4-5-20251001': 'claude-sonnet-4-6',
   'claude-3-5-haiku-20241022': 'claude-sonnet-4-6',
   'claude-3-haiku-20240307': 'claude-sonnet-4-6',
-  // Sonnet 4.5 date-suffixed → Venice's Sonnet 4.6
   'claude-sonnet-4-5-20250929': 'claude-sonnet-4-6',
   'claude-4-5-sonnet-20250929': 'claude-sonnet-4-6',
 };
 
 function mapModel(model: string): string {
   if (MODEL_MAP[model]) {
-    if (process.env.VENICE_PROXY_DEBUG) console.log(`[proxy] model remap: ${model} → ${MODEL_MAP[model]}`);
+    log(`model remap: ${model} → ${MODEL_MAP[model]}`);
     return MODEL_MAP[model];
   }
   return model;
+}
+
+function log(msg: string): void {
+  const ts = new Date().toISOString().slice(11, 23);
+  console.log(`[proxy ${ts}] ${msg}`);
+}
+
+function logError(msg: string): void {
+  const ts = new Date().toISOString().slice(11, 23);
+  console.error(`[proxy ${ts}] ${msg}`);
 }
 
 // --- Request Translation (Anthropic → OpenAI) ---
@@ -65,24 +87,10 @@ interface AnthropicTool {
   input_schema: Record<string, unknown>;
 }
 
-interface AnthropicRequest {
-  model: string;
-  max_tokens: number;
-  messages: AnthropicMessage[];
-  system?: string | Array<{ type: string; text: string }>;
-  tools?: AnthropicTool[];
-  tool_choice?: unknown;
-  stream?: boolean;
-  temperature?: number;
-  top_p?: number;
-  stop_sequences?: string[];
-  metadata?: unknown;
-  thinking?: unknown;
-}
-
 type OpenAIContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
+
 
 interface OpenAIMessage {
   role: string;
@@ -106,7 +114,6 @@ function translateMessages(anthropicMessages: AnthropicMessage[]): OpenAIMessage
       if (typeof msg.content === 'string') {
         openaiMessages.push({ role: 'user', content: msg.content });
       } else if (Array.isArray(msg.content)) {
-        // Check for tool_result blocks
         const toolResults = msg.content.filter((b) => b.type === 'tool_result');
         const textBlocks = msg.content.filter((b) => b.type === 'text');
         const imageBlocks = msg.content.filter((b) => b.type === 'image');
@@ -213,10 +220,9 @@ function translateTools(anthropicTools: AnthropicTool[]): Array<{
   }));
 }
 
-function translateRequest(body: AnthropicRequest): Record<string, unknown> {
+function translateRequest(body: AnthropicRequest, routedModel: string): Record<string, unknown> {
   const openaiMessages: OpenAIMessage[] = [];
 
-  // System message
   if (body.system) {
     if (typeof body.system === 'string') {
       openaiMessages.push({ role: 'system', content: body.system });
@@ -226,24 +232,32 @@ function translateRequest(body: AnthropicRequest): Record<string, unknown> {
     }
   }
 
-  // User/assistant messages
   openaiMessages.push(...translateMessages(body.messages));
 
-  const mappedModel = mapModel(body.model);
-
-  // Venice requires thinking.budget_tokens >= 1024 for Claude models
-  const isClaudeModel = mappedModel.startsWith('claude');
+  const finalModel = mapModel(routedModel);
+  const isClaudeModel = finalModel.startsWith('claude');
   const maxTokens = isClaudeModel ? Math.max(body.max_tokens, 4096) : body.max_tokens;
 
+  const veniceParams: Record<string, unknown> = {
+    include_venice_system_prompt: false,
+  };
+
+  // Only inject thinking budget when the incoming request explicitly requested it,
+  // rather than forcing it on every call (which adds latency to simple tool-result acks)
+  if (body.thinking && isClaudeModel) {
+    const thinkingConfig = body.thinking as Record<string, unknown>;
+    const budget = typeof thinkingConfig.budget_tokens === 'number'
+      ? Math.max(thinkingConfig.budget_tokens, 1024)
+      : 1024;
+    veniceParams.thinking = { budget_tokens: budget };
+  }
+
   const openaiReq: Record<string, unknown> = {
-    model: mappedModel,
+    model: finalModel,
     messages: openaiMessages,
     max_tokens: maxTokens,
     stream: body.stream || false,
-    venice_parameters: {
-      include_venice_system_prompt: false,
-      ...(isClaudeModel ? { thinking: { budget_tokens: 1024 } } : {}),
-    },
+    venice_parameters: veniceParams,
   };
 
   if (body.temperature != null) openaiReq.temperature = body.temperature;
@@ -336,7 +350,6 @@ function translateResponse(openaiResp: OpenAIResponse, model: string): Record<st
     }
   }
 
-  // Anthropic API requires at least one content block
   if (content.length === 0) {
     content.push({ type: 'text', text: '' });
   }
@@ -365,25 +378,36 @@ function createStreamingTranslator(
   let sentMessageStart = false;
   let contentBlockIndex = 0;
   let currentBlockOpen = false;
+  let currentBlockType: 'text' | 'tool_use' = 'text';
   let inputJsonBuffer = '';
   let currentToolCallId = '';
   let currentToolName = '';
-  let lineBuffer = ''; // Buffer for incomplete SSE lines split across TCP chunks
-  let ended = false; // Guard against double res.end()
+  let lineBuffer = '';
+  let ended = false;
 
   const send = (event: string, data: unknown) => {
     if (ended) return;
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
+  const closeCurrentBlock = () => {
+    if (!currentBlockOpen) return;
+    if (currentBlockType === 'tool_use' && inputJsonBuffer) {
+      send('content_block_delta', {
+        type: 'content_block_delta',
+        index: contentBlockIndex,
+        delta: { type: 'input_json_delta', partial_json: inputJsonBuffer },
+      });
+      inputJsonBuffer = '';
+    }
+    send('content_block_stop', { type: 'content_block_stop', index: contentBlockIndex });
+    currentBlockOpen = false;
+  };
+
   const finish = (stopReason: string) => {
     if (ended) return;
     ended = true;
-    // Close any open content block
-    if (currentBlockOpen) {
-      send('content_block_stop', { type: 'content_block_stop', index: contentBlockIndex });
-      currentBlockOpen = false;
-    }
+    closeCurrentBlock();
     send('message_delta', {
       type: 'message_delta',
       delta: { stop_reason: stopReason },
@@ -396,15 +420,14 @@ function createStreamingTranslator(
   return (chunk: string) => {
     if (ended) return;
 
-    // Accumulate partial lines from TCP chunk boundaries
     lineBuffer += chunk;
     const lines = lineBuffer.split('\n');
-    // Keep the last (potentially incomplete) line in the buffer
     lineBuffer = lines.pop() || '';
 
     for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6).trim();
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data: ')) continue;
+      const data = trimmed.slice(6);
       if (data === '[DONE]') {
         finish('end_turn');
         return;
@@ -417,7 +440,6 @@ function createStreamingTranslator(
         continue;
       }
 
-      // Send message_start on first chunk
       if (!sentMessageStart) {
         send('message_start', {
           type: 'message_start',
@@ -441,22 +463,18 @@ function createStreamingTranslator(
       const finishReason = choices[0].finish_reason as string | null;
 
       if (delta) {
-        // Text content
         if (delta.content != null) {
           const text = delta.content as string;
-          if (!currentBlockOpen || inputJsonBuffer) {
-            // New text block
-            if (currentBlockOpen) {
-              send('content_block_stop', { type: 'content_block_stop', index: contentBlockIndex });
-              contentBlockIndex++;
-            }
+          if (!currentBlockOpen || currentBlockType !== 'text') {
+            closeCurrentBlock();
+            if (currentBlockOpen) contentBlockIndex++;
             send('content_block_start', {
               type: 'content_block_start',
               index: contentBlockIndex,
               content_block: { type: 'text', text: '' },
             });
             currentBlockOpen = true;
-            inputJsonBuffer = '';
+            currentBlockType = 'text';
           }
           send('content_block_delta', {
             type: 'content_block_delta',
@@ -465,26 +483,13 @@ function createStreamingTranslator(
           });
         }
 
-        // Tool calls
         const toolCalls = delta.tool_calls as Array<Record<string, unknown>> | undefined;
         if (toolCalls) {
           for (const tc of toolCalls) {
             const fn = tc.function as Record<string, unknown> | undefined;
             if (fn?.name) {
-              // New tool call — close previous block if open
-              if (currentBlockOpen) {
-                // If we had a tool_use block open, flush the input JSON
-                if (inputJsonBuffer) {
-                  send('content_block_delta', {
-                    type: 'content_block_delta',
-                    index: contentBlockIndex,
-                    delta: { type: 'input_json_delta', partial_json: inputJsonBuffer },
-                  });
-                  inputJsonBuffer = '';
-                }
-                send('content_block_stop', { type: 'content_block_stop', index: contentBlockIndex });
-                contentBlockIndex++;
-              }
+              closeCurrentBlock();
+              if (currentBlockOpen) contentBlockIndex++;
               currentToolCallId = (tc.id as string) || `toolu_${Date.now()}`;
               currentToolName = fn.name as string;
               send('content_block_start', {
@@ -498,6 +503,7 @@ function createStreamingTranslator(
                 },
               });
               currentBlockOpen = true;
+              currentBlockType = 'tool_use';
               inputJsonBuffer = '';
             }
             if (fn?.arguments) {
@@ -513,7 +519,6 @@ function createStreamingTranslator(
         }
       }
 
-      // Handle finish reason
       if (finishReason) {
         finish(mapFinishReason(finishReason));
         return;
@@ -524,19 +529,6 @@ function createStreamingTranslator(
 
 // --- HTTP Proxy Server ---
 
-function forwardToVenice(
-  method: string,
-  path: string,
-  body: Buffer | null,
-  headers: Record<string, string>,
-): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; body: Buffer }>;
-function forwardToVenice(
-  method: string,
-  path: string,
-  body: Buffer | null,
-  headers: Record<string, string>,
-  onData?: (chunk: string) => void,
-): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; body: Buffer }>;
 function forwardToVenice(
   method: string,
   urlPath: string,
@@ -552,11 +544,12 @@ function forwardToVenice(
       port: url.port || 443,
       path: url.pathname + url.search,
       method,
+      agent: httpsAgent,
       headers: {
         ...headers,
         'Authorization': `Bearer ${VENICE_API_KEY}`,
         'Host': url.hostname,
-        'User-Agent': 'NanoClaw/1.1.0',
+        'User-Agent': 'NanoClaw/1.2.0',
         'Accept': 'application/json',
         'Accept-Encoding': 'identity',
         ...(body ? { 'Content-Length': String(body.length) } : {}),
@@ -592,14 +585,20 @@ function forwardToVenice(
     });
 
     req.on('error', reject);
+    req.setTimeout(120_000, () => {
+      req.destroy(new Error('Venice request timeout (120s)'));
+    });
     if (body) req.write(body);
     req.end();
   });
 }
 
+let requestCounter = 0;
+
 const server = http.createServer(async (req, res) => {
   const url = req.url || '/';
-  if (process.env.VENICE_PROXY_DEBUG) console.log(`[proxy] ${req.method} ${url}`);
+  const reqId = ++requestCounter;
+  const reqStart = Date.now();
 
   // Collect request body
   const bodyChunks: Buffer[] = [];
@@ -608,29 +607,39 @@ const server = http.createServer(async (req, res) => {
   }
   const rawBody = Buffer.concat(bodyChunks);
 
-  // Handle Anthropic Messages API (strip query params for matching)
   const urlPath = url.split('?')[0];
   if (urlPath === '/v1/messages' && req.method === 'POST') {
     try {
       const anthropicReq: AnthropicRequest = JSON.parse(rawBody.toString());
-      const requestModel = anthropicReq.model;
       const isStreaming = anthropicReq.stream === true;
-      const openaiReq = translateRequest(anthropicReq);
+
+      // Per-group routing overrides via X-Venice-Routing header (JSON)
+      const routingHeader = req.headers['x-venice-routing'] as string | undefined;
+      if (routingHeader) {
+        try {
+          const overrides = JSON.parse(routingHeader);
+          setRoutingConfig(overrides);
+        } catch { /* ignore malformed header */ }
+      }
+
+      const routedModel = routeModel(anthropicReq);
+      const openaiReq = translateRequest(anthropicReq, routedModel);
       const openaiBody = Buffer.from(JSON.stringify(openaiReq));
 
       const requestId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const hasTools = !!(anthropicReq.tools && anthropicReq.tools.length > 0);
+      const msgCount = anthropicReq.messages.length;
 
-      if (process.env.VENICE_PROXY_DEBUG) console.log(`[proxy] ${requestModel} → ${openaiReq.model} (stream=${isStreaming}, body=${openaiBody.length} bytes)`);
+      log(`#${reqId} ${anthropicReq.model}→${openaiReq.model} stream=${isStreaming} tools=${hasTools} msgs=${msgCount} body=${openaiBody.length}b`);
 
       if (isStreaming) {
-        // Streaming: pipe SSE chunks through translator
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
         });
 
-        const translator = createStreamingTranslator(res, requestModel, requestId);
+        const translator = createStreamingTranslator(res, anthropicReq.model, requestId);
 
         try {
           const streamResp = await forwardToVenice(
@@ -640,10 +649,13 @@ const server = http.createServer(async (req, res) => {
             { 'Content-Type': 'application/json' },
             translator,
           );
-          // If Venice returned a non-200, the translator may not have sent
-          // a proper message_stop. Ensure the stream is properly terminated.
+
+          const elapsed = Date.now() - reqStart;
+          notifyRequestComplete(anthropicReq, routedModel, elapsed, streamResp.statusCode === 200);
+          log(`#${reqId} completed ${elapsed}ms status=${streamResp.statusCode}`);
+
           if (streamResp.statusCode !== 200 && !res.writableEnded) {
-            if (process.env.VENICE_PROXY_DEBUG) console.error(`[proxy] Venice streaming returned HTTP ${streamResp.statusCode}: ${streamResp.body.toString().slice(0, 500)}`);
+            logError(`#${reqId} Venice streaming HTTP ${streamResp.statusCode}: ${streamResp.body.toString().slice(0, 300)}`);
             const errorEvent = {
               type: 'error',
               error: { type: 'api_error', message: `Venice API returned HTTP ${streamResp.statusCode}` },
@@ -652,7 +664,9 @@ const server = http.createServer(async (req, res) => {
             res.end();
           }
         } catch (err) {
-          if (process.env.VENICE_PROXY_DEBUG) console.error('[proxy] Venice streaming error:', err);
+          const elapsed = Date.now() - reqStart;
+          notifyRequestComplete(anthropicReq, routedModel, elapsed, false);
+          logError(`#${reqId} streaming error (${elapsed}ms): ${err}`);
           if (!res.writableEnded) {
             const errorEvent = {
               type: 'error',
@@ -663,7 +677,6 @@ const server = http.createServer(async (req, res) => {
           }
         }
       } else {
-        // Non-streaming: translate full response
         const veniceResp = await forwardToVenice(
           'POST',
           '/chat/completions',
@@ -671,24 +684,23 @@ const server = http.createServer(async (req, res) => {
           { 'Content-Type': 'application/json' },
         );
 
+        const elapsed = Date.now() - reqStart;
+        notifyRequestComplete(anthropicReq, routedModel, elapsed, veniceResp.statusCode === 200);
+
         if (veniceResp.statusCode !== 200) {
-          if (process.env.VENICE_PROXY_DEBUG) console.error(`[proxy] Venice returned HTTP ${veniceResp.statusCode}: ${veniceResp.body.toString().slice(0, 500)}`);
-          // Translate Venice/OpenAI error format to Anthropic error format
+          logError(`#${reqId} Venice HTTP ${veniceResp.statusCode} (${elapsed}ms): ${veniceResp.body.toString().slice(0, 300)}`);
           let errorMessage = `Venice API error (HTTP ${veniceResp.statusCode})`;
           let errorType = 'api_error';
           try {
             const veniceError = JSON.parse(veniceResp.body.toString());
             if (veniceError.error?.message) errorMessage = veniceError.error.message;
-            // Map OpenAI error types to Anthropic types
             if (veniceResp.statusCode === 401) errorType = 'authentication_error';
             else if (veniceResp.statusCode === 429) errorType = 'rate_limit_error';
             else if (veniceResp.statusCode === 400) errorType = 'invalid_request_error';
             else if (veniceResp.statusCode === 404) errorType = 'not_found_error';
             else if (veniceResp.statusCode >= 500) errorType = 'api_error';
-          } catch {
-            // Body wasn't JSON, use default message
-          }
-          // Map Venice status codes to Anthropic-expected codes
+          } catch { /* use defaults */ }
+
           const anthropicStatus = veniceResp.statusCode === 401 ? 401
             : veniceResp.statusCode === 429 ? 429
             : veniceResp.statusCode === 400 ? 400
@@ -703,14 +715,18 @@ const server = http.createServer(async (req, res) => {
         }
 
         const openaiResp: OpenAIResponse = JSON.parse(veniceResp.body.toString());
-        const anthropicResp = translateResponse(openaiResp, requestModel);
+        const anthropicResp = translateResponse(openaiResp, anthropicReq.model);
         anthropicResp.id = requestId;
+
+        const usage = openaiResp.usage;
+        log(`#${reqId} completed ${elapsed}ms in=${usage?.prompt_tokens || '?'} out=${usage?.completion_tokens || '?'}`);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(anthropicResp));
       }
     } catch (err) {
-      if (process.env.VENICE_PROXY_DEBUG) console.error('[proxy] Translation error:', err);
+      const elapsed = Date.now() - reqStart;
+      logError(`#${reqId} translation error (${elapsed}ms): ${err}`);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         type: 'error',
@@ -720,9 +736,8 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Pass through other endpoints (e.g., /v1/models) directly to Venice
+  // Pass through other endpoints
   try {
-    // Map Anthropic-style paths to Venice OpenAI paths
     let venicePath = url;
     if (url === '/v1/models') venicePath = '/models';
 
@@ -736,23 +751,21 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(veniceResp.statusCode, { 'Content-Type': 'application/json' });
     res.end(veniceResp.body);
   } catch (err) {
-    if (process.env.VENICE_PROXY_DEBUG) console.error('[proxy] Passthrough error:', err);
+    logError(`#${reqId} passthrough error: ${err}`);
     res.writeHead(502, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: `Proxy error: ${err}` }));
   }
 });
 
-// Prevent crashes from client disconnects or unhandled rejections
 process.on('uncaughtException', (err) => {
-  console.error('[proxy] Uncaught exception (kept running):', err.message);
+  logError(`Uncaught exception (kept running): ${err.message}`);
 });
 process.on('unhandledRejection', (err) => {
-  console.error('[proxy] Unhandled rejection (kept running):', err);
+  logError(`Unhandled rejection (kept running): ${err}`);
 });
 
 server.listen(PORT, () => {
-  console.log(`Venice proxy → localhost:${PORT}`);
-  if (process.env.VENICE_PROXY_DEBUG) {
-    console.log(`Forwarding to: ${VENICE_BASE_URL} (debug logging enabled)`);
-  }
+  log(`Venice proxy listening on localhost:${PORT}`);
+  log(`Forwarding to: ${VENICE_BASE_URL}`);
+  log(`Connection pooling: keepAlive=true maxSockets=10`);
 });

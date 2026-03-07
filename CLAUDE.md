@@ -13,7 +13,9 @@ Single Node.js process that connects to WhatsApp and/or Telegram, routes message
 | `src/index.ts` | Orchestrator: state, message loop, agent invocation |
 | `src/channels/whatsapp.ts` | WhatsApp connection, auth, send/receive |
 | `src/channels/telegram.ts` | Telegram bot connection, send/receive |
-| `proxy/venice-proxy.ts` | Anthropic→OpenAI format proxy for Venice API |
+| `proxy/venice-proxy.ts` | Anthropic→OpenAI format proxy for Venice API (connection pooling, diagnostics) |
+| `proxy/model-router.ts` | Multi-model routing — classifies requests, picks optimal Venice model |
+| `src/fast-path.ts` | Direct Venice API calls for simple chat (bypasses container + SDK) |
 | `src/ipc.ts` | IPC watcher and task processing |
 | `src/router.ts` | Message formatting and outbound routing |
 | `src/config.ts` | Trigger pattern, paths, intervals |
@@ -37,7 +39,7 @@ Single Node.js process that connects to WhatsApp and/or Telegram, routes message
 ## Venice API & Model Switching
 
 All inference routes through Venice AI via a local proxy:
-- **CLI default**: `zai-org-glm-5` (GLM 5 — cheap for setup; switch to sonnet/opus after with `/model`)
+- **CLI default**: `claude-sonnet-4-6` (switch with `/model` anytime)
 - **Agent default**: `claude-sonnet-4-6`
 - Users can switch models by asking the bot (e.g., "switch to opus" or "use glm-5")
 - The proxy passes model names straight through to Venice — any Venice model ID works
@@ -48,6 +50,12 @@ When a user asks to switch models (e.g., "switch to opus", "use a faster model")
 - Write the desired Venice model ID to `/workspace/group/.venice-model`
 - Default: `claude-sonnet-4-6`. Other options: `claude-opus-4-6`, `zai-org-glm-5`, or any Venice model ID
 - The change takes effect on the next message
+
+For advanced multi-model routing, create `/workspace/group/.venice-routing.json`:
+```json
+{"defaultModel": "claude-sonnet-4-6", "fastModel": "claude-sonnet-4-6", "powerModel": "claude-opus-4-6"}
+```
+The proxy automatically routes simple requests (tool acks, short context) to `fastModel` and complex reasoning to `powerModel`.
 
 ## Development
 

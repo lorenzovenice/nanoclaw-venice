@@ -41,7 +41,11 @@ Venice provides anonymized access to frontier models (Claude Opus, Claude Sonnet
 - A personal AI assistant on **Telegram** and/or **WhatsApp**
 - Powered by **Venice AI** — no Anthropic account needed
 - Bot runs in an **isolated Docker container** (sandboxed, can't access your system)
+- **Fast path for chat** — simple messages (greetings, questions, conversation) get direct Venice API calls with ~3-5s response time, no container overhead
+- **Full agent path for tasks** — complex requests (file ops, web browsing, scheduling) use the Claude Agent SDK in isolated containers
+- **Multi-model routing** — the proxy automatically selects the best Venice model based on task complexity
 - **Model switching** — tell the bot "switch to zai-org-glm-5" or "use opus" anytime
+- **Per-group routing config** — customize model preferences per chat with `.venice-routing.json`
 - **Scheduled tasks** — set reminders, recurring tasks
 - **Web search and browsing** built in
 - **Markdown formatting** in Telegram messages
@@ -116,7 +120,7 @@ VENICE_API_KEY=your-key npm run venice
 
 Replace `your-key` with your actual Venice API key (the one from [venice.ai/settings/api](https://venice.ai/settings/api)). This starts the Venice proxy and launches Claude Code through it in a single command.
 
-> **Note:** Claude Code defaults to **GLM 5** (`zai-org-glm-5`) to keep setup costs low. After setup, type `/model` inside Claude Code to switch to `claude-sonnet-4-6` or `claude-opus-4-6` for best performance.
+> **Note:** Claude Code defaults to **Sonnet 4.6** (`claude-sonnet-4-6`) for reliable setup. After setup, you can switch models anytime with `/model` — use `zai-org-glm-5` for cheaper daily use or `claude-opus-4-6` for maximum capability.
 
 Claude Code will start up. It may ask "Do you want to use this API key?" — **select Yes**.
 
@@ -299,9 +303,9 @@ Your WhatsApp session can expire if you haven't used the bot in a while. To reco
 | Context | Default Model | How to switch |
 |---------|--------------|---------------|
 | Bot (in chat) | `claude-sonnet-4-6` | Tell the bot: "switch to opus" or "use zai-org-glm-5" |
-| Claude Code CLI | `zai-org-glm-5` (GLM 5) | Use `/model` in Claude Code or `claude --model <name>` |
+| Claude Code CLI | `claude-sonnet-4-6` | Use `/model` in Claude Code or `claude --model <name>` |
 
-> **Tip:** The CLI defaults to GLM 5 to keep setup costs low. After setup, switch to `claude-sonnet-4-6` or `claude-opus-4-6` for best performance.
+> **Tip:** For cheaper daily CLI use, switch to `zai-org-glm-5` with `/model`. Switch back to Sonnet or Opus anytime.
 
 Available Venice models include `claude-opus-4-6`, `claude-sonnet-4-6`, `zai-org-glm-5`, and more. See the full list at [docs.venice.ai/models/overview](https://docs.venice.ai/models/overview).
 
@@ -388,31 +392,68 @@ npm test             # Run tests
 You (WhatsApp/Telegram)
         |
         v
-   NanoClaw (Node.js process)
+   NanoClaw (Node.js host process)
         |
         v
-   Docker Container (isolated sandbox)
+   Docker Container (ephemeral, per-group isolation)
         |
         v
-   Venice Proxy (localhost:4001)
+   Venice Proxy (localhost:4001, with multi-model routing)
         |
         v
    api.venice.ai (private inference)
 ```
 
+Messages are classified into two paths:
+
+- **Fast path**: Simple conversational messages (greetings, questions, casual chat) call Venice's API directly from the host process — no container, no SDK, no proxy. Response time: ~3-5 seconds.
+- **Full path**: Complex requests that need tools (file I/O, web browsing, bash, scheduling, group management) spawn an isolated Docker container running the Claude Agent SDK. Each container is ephemeral, per-group isolated, and self-destructs after 5 minutes idle.
+
+The Venice proxy sits between the Claude Agent SDK and Venice for the full path, translating Anthropic format to OpenAI format with **HTTPS connection pooling** and **intelligent model routing**.
+
 | File | What it does |
 |------|-------------|
-| `proxy/venice-proxy.ts` | Translates Anthropic format to OpenAI format for Venice |
+| `proxy/venice-proxy.ts` | Translates Anthropic ↔ OpenAI format with connection pooling and diagnostics |
+| `proxy/model-router.ts` | Multi-model routing — classifies requests and picks optimal Venice model |
+| `src/fast-path.ts` | Direct Venice API for simple chat — bypasses container + SDK for fast responses |
 | `src/index.ts` | Main orchestrator — message loop, agent invocation |
+| `src/container-runner.ts` | Spawns isolated agent containers with per-group filesystem mounts |
+| `src/group-queue.ts` | Per-group concurrency control (max 5 containers, retry with backoff) |
 | `src/channels/whatsapp.ts` | WhatsApp connection via baileys |
 | `src/channels/telegram.ts` | Telegram bot via grammy |
-| `src/container-runner.ts` | Spawns isolated agent containers |
+| `container/agent-runner/src/index.ts` | Runs inside the container — Claude Agent SDK query loop |
+
+### Multi-Model Routing
+
+The proxy automatically routes requests to different Venice models based on task dimensions:
+
+| Rule | Condition | Model |
+|------|-----------|-------|
+| Tool result ack | Simple tool results, short context | Fast model |
+| Short conversation | Few messages, no tools | Fast model |
+| Complex reasoning | Extended thinking or large context | Power model |
+| Heavy tool use | Long tool-use chains | Default model |
+| Default | Everything else | Default model |
+
+Routing is **session-sticky** — once a model is selected for a conversation turn, it's maintained through the entire tool-use loop to prevent mid-conversation model switches.
+
+Configure model tiers globally via `VENICE_ROUTING_CONFIG` env var, or per-group by creating `.venice-routing.json` in the group folder:
+
+```json
+{
+  "defaultModel": "claude-sonnet-4-6",
+  "fastModel": "claude-sonnet-4-6",
+  "powerModel": "claude-opus-4-6"
+}
+```
+
+See `config-examples/venice-routing.json` for a template.
 
 ---
 
 ## FAQ
 
-**Why do I need a proxy?** The Claude Agent SDK speaks Anthropic's message format. Venice speaks OpenAI's format. The proxy translates between them so everything works without modifying the SDK.
+**Why do I need a proxy?** Only for the full agent path. The Claude Agent SDK speaks Anthropic's message format; Venice speaks OpenAI's. The proxy translates between them. The fast path (simple chat) calls Venice directly and doesn't need the proxy at all.
 
 **Can I use open-source models?** Yes. Venice hosts many models. Tell the bot "switch to zai-org-glm-5" or any Venice model ID.
 
@@ -421,6 +462,10 @@ You (WhatsApp/Telegram)
 **Do I need an Anthropic subscription?** No. Everything runs through Venice AI. You only need a Venice API key.
 
 **Can I use this on a server?** Yes. It works on any Linux machine with Docker. Use the systemd service for auto-start on boot.
+
+**Why was the bot slow before?** The original Venice proxy created a fresh TLS connection for every API call, forced 1024 thinking tokens on every request (even simple tool acknowledgments), and had 30-minute idle timeouts. This fork adds connection pooling, conditional thinking, 5-minute timeouts, and a fast path that bypasses the container entirely for simple chat — dropping response times from minutes to seconds.
+
+**What's the fast path?** Simple messages ("hello", "how are you", general questions) call Venice directly from the host process without spawning a Docker container or going through the Claude Agent SDK. Complex requests (file operations, web browsing, task scheduling) still use the full container path for security and tool access.
 
 ---
 

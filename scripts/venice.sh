@@ -61,4 +61,4 @@ else
 fi
 
 # Launch Claude Code through the proxy
-exec env ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude --model zai-org-glm-5
+exec env ANTHROPIC_BASE_URL=http://localhost:4001 ANTHROPIC_API_KEY=venice-proxy claude --model claude-sonnet-4-6

@@ -28,6 +28,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   secrets?: Record<string, string>;
+  routingConfig?: Record<string, string>;
 }
 
 interface ContainerOutput {
@@ -535,15 +536,35 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
-  // Read model from per-group config file, default to claude-sonnet-4-6
-  const modelFilePath = '/workspace/group/.venice-model';
+  // Read model from per-group config, falling back through:
+  // 1. .venice-routing.json defaultModel (from host via stdin)
+  // 2. .venice-model file (direct per-group override)
+  // 3. hardcoded default
   let model = 'claude-sonnet-4-6';
+  const routingConfigPath = '/workspace/group/.venice-routing.json';
+  try {
+    if (fs.existsSync(routingConfigPath)) {
+      const rc = JSON.parse(fs.readFileSync(routingConfigPath, 'utf-8'));
+      if (rc.defaultModel) model = rc.defaultModel;
+      log(`Routing config: default=${rc.defaultModel || 'n/a'} fast=${rc.fastModel || 'n/a'} power=${rc.powerModel || 'n/a'}`);
+    }
+  } catch { /* ignore */ }
+  const modelFilePath = '/workspace/group/.venice-model';
   try {
     if (fs.existsSync(modelFilePath)) {
       const m = fs.readFileSync(modelFilePath, 'utf-8').trim();
       if (m) model = m;
     }
   } catch { /* use default */ }
+
+  // If routing config was passed from host, write it to the group dir
+  // so the proxy can pick it up on subsequent requests
+  if (containerInput.routingConfig) {
+    try {
+      fs.writeFileSync(routingConfigPath, JSON.stringify(containerInput.routingConfig, null, 2));
+    } catch { /* non-critical */ }
+  }
+
   log(`Using model: ${model}`);
 
   // Streaming state: accumulate text deltas and flush periodically
