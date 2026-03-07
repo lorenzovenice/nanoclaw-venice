@@ -22,6 +22,20 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function splitHtml(html: string, maxLength: number): string[] {
+  const chunks: string[] = [];
+  let remaining = html;
+  while (remaining.length > maxLength) {
+    let splitAt = remaining.lastIndexOf('\n\n', maxLength);
+    if (splitAt <= 0) splitAt = remaining.lastIndexOf('\n', maxLength);
+    if (splitAt <= 0) splitAt = maxLength;
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).replace(/^\n+/, '');
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
 /**
  * Convert standard markdown to Telegram-compatible HTML.
  * Handles code blocks, inline code, bold, italic, strikethrough, and links.
@@ -90,6 +104,8 @@ export class TelegramChannel implements Channel {
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
+  // Active streaming drafts: jid → { messageId, lastEditTime }
+  private drafts = new Map<string, { messageId: number; lastEditTime: number }>();
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
@@ -328,33 +344,82 @@ export class TelegramChannel implements Channel {
 
     try {
       const numericId = jid.replace(/^tg:/, '');
-
       const html = markdownToTelegramHtml(text);
 
-      // Telegram has a 4096 character limit per message — split if needed
+      // If a streaming draft exists, finalize it with the full text
+      const draft = this.drafts.get(jid);
+      this.drafts.delete(jid);
+      if (draft) {
+        const MAX_LENGTH = 4096;
+        try {
+          if (html.length <= MAX_LENGTH) {
+            await this.bot.api.editMessageText(numericId, draft.messageId, html, {
+              parse_mode: 'HTML',
+            });
+          } else {
+            // First chunk replaces the draft; subsequent chunks are new messages
+            const chunks = splitHtml(html, MAX_LENGTH);
+            await this.bot.api.editMessageText(numericId, draft.messageId, chunks[0], {
+              parse_mode: 'HTML',
+            });
+            for (const chunk of chunks.slice(1)) {
+              await this.bot.api.sendMessage(numericId, chunk, { parse_mode: 'HTML' });
+            }
+          }
+          logger.info({ jid, length: text.length }, 'Telegram streaming message finalized');
+          return;
+        } catch (editErr) {
+          logger.debug({ jid, editErr }, 'Failed to edit streaming draft, sending new message');
+          // Fall through to send as a fresh message
+        }
+      }
+
+      // No draft (or edit failed): send as a new message
       const MAX_LENGTH = 4096;
       if (html.length <= MAX_LENGTH) {
         await this.bot.api.sendMessage(numericId, html, { parse_mode: 'HTML' });
       } else {
-        // Split on double-newline boundaries to avoid breaking tags
-        const chunks: string[] = [];
-        let remaining = html;
-        while (remaining.length > MAX_LENGTH) {
-          let splitAt = remaining.lastIndexOf('\n\n', MAX_LENGTH);
-          if (splitAt <= 0) splitAt = remaining.lastIndexOf('\n', MAX_LENGTH);
-          if (splitAt <= 0) splitAt = MAX_LENGTH;
-          chunks.push(remaining.slice(0, splitAt));
-          remaining = remaining.slice(splitAt).replace(/^\n+/, '');
-        }
-        if (remaining) chunks.push(remaining);
-
-        for (const chunk of chunks) {
+        for (const chunk of splitHtml(html, MAX_LENGTH)) {
           await this.bot.api.sendMessage(numericId, chunk, { parse_mode: 'HTML' });
         }
       }
       logger.info({ jid, length: text.length }, 'Telegram message sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
+    }
+  }
+
+  async sendStreamDelta(jid: string, text: string): Promise<void> {
+    if (!this.bot) return;
+    const numericId = jid.replace(/^tg:/, '');
+
+    const draft = this.drafts.get(jid);
+    if (!draft) {
+      // First delta: send placeholder message to capture its ID
+      try {
+        const html = escapeHtml(text);
+        const sent = await this.bot.api.sendMessage(numericId, html || '…', {
+          parse_mode: 'HTML',
+        });
+        this.drafts.set(jid, { messageId: sent.message_id, lastEditTime: Date.now() });
+      } catch (err) {
+        logger.debug({ jid, err }, 'Failed to send streaming draft');
+      }
+      return;
+    }
+
+    // Rate-limit edits: max 1 per second per chat
+    const now = Date.now();
+    if (now - draft.lastEditTime < 1000) return;
+
+    try {
+      const html = escapeHtml(text);
+      await this.bot.api.editMessageText(numericId, draft.messageId, html, {
+        parse_mode: 'HTML',
+      });
+      draft.lastEditTime = now;
+    } catch (err) {
+      logger.debug({ jid, err }, 'Failed to update streaming draft');
     }
   }
 

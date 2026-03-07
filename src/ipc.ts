@@ -11,7 +11,7 @@ import {
 } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
-import { isValidGroupFolder } from './group-folder.js';
+import { isValidGroupFolder, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
@@ -27,9 +27,78 @@ export interface IpcDeps {
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
   ) => void;
+  delegateTask?: (
+    targetJid: string,
+    prompt: string,
+    contextMode: 'group' | 'isolated',
+    model: string | null,
+    taskName: string,
+    sourceGroup: string,
+  ) => void;
+  onIpcActivity?: (sourceGroup: string) => void;
+}
+
+/**
+ * Write an error message into a container's IPC input directory so the
+ * agent learns that a direct file write failed and should use MCP tools.
+ */
+function sendIpcErrorToContainer(sourceGroup: string, detail: string): void {
+  try {
+    const inputDir = path.join(resolveGroupIpcPath(sourceGroup), 'input');
+    fs.mkdirSync(inputDir, { recursive: true });
+    const msg = {
+      type: 'message',
+      text: `[SYSTEM: An IPC file you wrote directly was rejected. ${detail} Do NOT write files to /workspace/ipc/ directly — always use your MCP tools (mcp__nanoclaw__send_message, mcp__nanoclaw__schedule_task, etc.). Retry using the correct tool now.]`,
+    };
+    const file = path.join(inputDir, `ipc-error-${Date.now()}.json`);
+    fs.writeFileSync(file, JSON.stringify(msg));
+  } catch (err) {
+    logger.error({ err, sourceGroup }, 'Failed to send IPC error feedback to container');
+  }
 }
 
 let ipcWatcherRunning = false;
+let storedDeps: IpcDeps | null = null;
+
+/**
+ * Flush any remaining IPC message files for a specific group.
+ * Called after a subagent container exits to process last-moment messages
+ * before the safety net relay fires.
+ */
+export async function flushGroupIpcMessages(groupFolder: string): Promise<void> {
+  if (!storedDeps) return;
+  const deps = storedDeps;
+  const ipcBaseDir = path.join(DATA_DIR, 'ipc');
+  const messagesDir = path.join(ipcBaseDir, groupFolder, 'messages');
+  const isMain = groupFolder === MAIN_GROUP_FOLDER;
+  const registeredGroups = deps.registeredGroups();
+
+  try {
+    if (!fs.existsSync(messagesDir)) return;
+    const messageFiles = fs.readdirSync(messagesDir).filter((f) => f.endsWith('.json'));
+    if (messageFiles.length === 0) return;
+    logger.info({ groupFolder, count: messageFiles.length }, 'Flushing remaining IPC messages after container exit');
+    for (const file of messageFiles) {
+      const filePath = path.join(messagesDir, file);
+      try {
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        if (data.type === 'message' && data.chatJid && data.text) {
+          const targetGroup = registeredGroups[data.chatJid];
+          if (isMain || (targetGroup && targetGroup.folder === groupFolder)) {
+            await deps.sendMessage(data.chatJid, data.text);
+            logger.info({ chatJid: data.chatJid, groupFolder }, 'IPC message sent (flush)');
+          }
+        }
+        fs.unlinkSync(filePath);
+      } catch (err) {
+        logger.error({ file, groupFolder, err }, 'Error processing IPC message during flush');
+        try { fs.unlinkSync(filePath); } catch {}
+      }
+    }
+  } catch (err) {
+    logger.error({ err, groupFolder }, 'Error during IPC flush');
+  }
+}
 
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
@@ -37,6 +106,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
     return;
   }
   ipcWatcherRunning = true;
+  storedDeps = deps;
 
   const ipcBaseDir = path.join(DATA_DIR, 'ipc');
   fs.mkdirSync(ipcBaseDir, { recursive: true });
@@ -71,25 +141,36 @@ export function startIpcWatcher(deps: IpcDeps): void {
           for (const file of messageFiles) {
             const filePath = path.join(messagesDir, file);
             try {
-              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if (data.type === 'message' && data.chatJid && data.text) {
-                // Authorization: verify this group can send to this chatJid
-                const targetGroup = registeredGroups[data.chatJid];
-                if (
-                  isMain ||
-                  (targetGroup && targetGroup.folder === sourceGroup)
-                ) {
-                  await deps.sendMessage(data.chatJid, data.text);
-                  logger.info(
-                    { chatJid: data.chatJid, sourceGroup },
-                    'IPC message sent',
-                  );
-                } else {
-                  logger.warn(
-                    { chatJid: data.chatJid, sourceGroup },
-                    'Unauthorized IPC message attempt blocked',
-                  );
-                }
+              const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+
+              // Validate: message files must have type='message' with chatJid+text
+              if (raw.type !== 'message' || !raw.chatJid || !raw.text) {
+                logger.warn({ file, sourceGroup, type: raw.type }, 'Rejected invalid IPC message file');
+                sendIpcErrorToContainer(sourceGroup, `The file "${file}" was rejected because it is not a valid message IPC file.`);
+                fs.unlinkSync(filePath);
+                continue;
+              }
+
+              const data = raw;
+              // Authorization: verify this group can send to this chatJid
+              const targetGroup = registeredGroups[data.chatJid];
+              if (
+                isMain ||
+                (targetGroup && targetGroup.folder === sourceGroup)
+              ) {
+                await deps.sendMessage(data.chatJid, data.text);
+                logger.info(
+                  { chatJid: data.chatJid, sourceGroup },
+                  'IPC message sent',
+                );
+                // Notify subagent IPC activity callback if registered
+                deps.onIpcActivity?.(sourceGroup);
+              } else {
+                logger.warn(
+                  { chatJid: data.chatJid, sourceGroup },
+                  'Unauthorized IPC message attempt blocked',
+                );
+                sendIpcErrorToContainer(sourceGroup, `You tried to send a message to "${data.chatJid}" but your group is not authorized to do so.`);
               }
               fs.unlinkSync(filePath);
             } catch (err) {
@@ -163,6 +244,8 @@ export async function processTaskIpc(
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
+    model?: string;
+    taskName?: string;
     // For register_group
     jid?: string;
     name?: string;
@@ -171,8 +254,8 @@ export async function processTaskIpc(
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
   },
-  sourceGroup: string, // Verified identity from IPC directory
-  isMain: boolean, // Verified from directory path
+  sourceGroup: string,
+  isMain: boolean,
   deps: IpcDeps,
 ): Promise<void> {
   const registeredGroups = deps.registeredGroups();
@@ -185,7 +268,6 @@ export async function processTaskIpc(
         data.schedule_value &&
         data.targetJid
       ) {
-        // Resolve the target group from JID
         const targetJid = data.targetJid as string;
         const targetGroupEntry = registeredGroups[targetJid];
 
@@ -199,7 +281,6 @@ export async function processTaskIpc(
 
         const targetFolder = targetGroupEntry.folder;
 
-        // Authorization: non-main groups can only schedule for themselves
         if (!isMain && targetFolder !== sourceGroup) {
           logger.warn(
             { sourceGroup, targetFolder },
@@ -275,10 +356,12 @@ export async function processTaskIpc(
         const task = getTaskById(data.taskId);
         if (!task) {
           logger.warn({ taskId: data.taskId, sourceGroup }, 'Task not found for update');
+          sendIpcErrorToContainer(sourceGroup, `Task "${data.taskId}" was not found.`);
           break;
         }
         if (!isMain && task.group_folder !== sourceGroup) {
           logger.warn({ taskId: data.taskId, sourceGroup }, 'Unauthorized task update attempt');
+          sendIpcErrorToContainer(sourceGroup, `You are not authorized to update task "${data.taskId}".`);
           break;
         }
         const updates: Parameters<typeof updateTask>[1] = {};
@@ -301,11 +384,15 @@ export async function processTaskIpc(
             { taskId: data.taskId, sourceGroup },
             'Task paused via IPC',
           );
+        } else if (!task) {
+          logger.warn({ taskId: data.taskId, sourceGroup }, 'Task not found for pause');
+          sendIpcErrorToContainer(sourceGroup, `Task "${data.taskId}" was not found.`);
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
             'Unauthorized task pause attempt',
           );
+          sendIpcErrorToContainer(sourceGroup, `You are not authorized to pause task "${data.taskId}".`);
         }
       }
       break;
@@ -319,11 +406,15 @@ export async function processTaskIpc(
             { taskId: data.taskId, sourceGroup },
             'Task resumed via IPC',
           );
+        } else if (!task) {
+          logger.warn({ taskId: data.taskId, sourceGroup }, 'Task not found for resume');
+          sendIpcErrorToContainer(sourceGroup, `Task "${data.taskId}" was not found.`);
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
             'Unauthorized task resume attempt',
           );
+          sendIpcErrorToContainer(sourceGroup, `You are not authorized to resume task "${data.taskId}".`);
         }
       }
       break;
@@ -337,24 +428,26 @@ export async function processTaskIpc(
             { taskId: data.taskId, sourceGroup },
             'Task cancelled via IPC',
           );
+        } else if (!task) {
+          logger.warn({ taskId: data.taskId, sourceGroup }, 'Task not found for cancel');
+          sendIpcErrorToContainer(sourceGroup, `Task "${data.taskId}" was not found.`);
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
             'Unauthorized task cancel attempt',
           );
+          sendIpcErrorToContainer(sourceGroup, `You are not authorized to cancel task "${data.taskId}".`);
         }
       }
       break;
 
     case 'refresh_groups':
-      // Only main group can request a refresh
       if (isMain) {
         logger.info(
           { sourceGroup },
           'Group metadata refresh requested via IPC',
         );
         await deps.syncGroupMetadata(true);
-        // Write updated snapshot immediately
         const availableGroups = deps.getAvailableGroups();
         deps.writeGroupsSnapshot(
           sourceGroup,
@@ -367,16 +460,17 @@ export async function processTaskIpc(
           { sourceGroup },
           'Unauthorized refresh_groups attempt blocked',
         );
+        sendIpcErrorToContainer(sourceGroup, 'Only the main group can request a groups refresh.');
       }
       break;
 
     case 'register_group':
-      // Only main group can register new groups
       if (!isMain) {
         logger.warn(
           { sourceGroup },
           'Unauthorized register_group attempt blocked',
         );
+        sendIpcErrorToContainer(sourceGroup, 'Only the main group can register new groups.');
         break;
       }
       if (data.jid && data.name && data.folder && data.trigger) {
@@ -402,6 +496,60 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'delegate_task': {
+      if (!data.prompt || !data.targetJid) {
+        logger.warn({ sourceGroup }, 'Invalid delegate_task: missing prompt or targetJid');
+        sendIpcErrorToContainer(sourceGroup, 'delegate_task requires prompt and targetJid.');
+        break;
+      }
+
+      const targetJid = data.targetJid as string;
+      const targetGroup = registeredGroups[targetJid];
+
+      if (!targetGroup) {
+        logger.warn({ targetJid, sourceGroup }, 'Cannot delegate task: target group not registered');
+        sendIpcErrorToContainer(sourceGroup, `Target group "${targetJid}" is not registered.`);
+        break;
+      }
+
+      const targetFolder = targetGroup.folder;
+
+      if (!isMain && targetFolder !== sourceGroup) {
+        logger.warn(
+          { sourceGroup, targetFolder },
+          'Unauthorized delegate_task attempt blocked',
+        );
+        sendIpcErrorToContainer(sourceGroup, `You are not authorized to delegate tasks to group "${targetJid}".`);
+        break;
+      }
+
+      const contextMode =
+        data.context_mode === 'group' || data.context_mode === 'isolated'
+          ? data.context_mode
+          : 'group';
+
+      const taskName = data.taskName || 'Delegated task';
+
+      if (deps.delegateTask) {
+        deps.delegateTask(
+          targetJid,
+          data.prompt as string,
+          contextMode,
+          data.model || null,
+          taskName,
+          sourceGroup,
+        );
+
+        logger.info(
+          { sourceGroup, targetFolder, taskName, contextMode },
+          'Task delegated via IPC (immediate execution)',
+        );
+      } else {
+        logger.warn({ sourceGroup }, 'delegate_task called but no delegateTask handler registered');
+      }
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

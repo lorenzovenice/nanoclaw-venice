@@ -7,6 +7,7 @@ import {
   MAIN_GROUP_FOLDER,
   MAX_MESSAGE_AGE,
   POLL_INTERVAL,
+  SESSION_IDLE_TTL_MS,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
   TRIGGER_PATTERN,
@@ -19,8 +20,9 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
-import { cleanupOrphans, ensureContainerRuntimeRunning } from './container-runtime.js';
+import { cleanupOrphans, cleanupStaleIpcFiles, ensureContainerRuntimeRunning } from './container-runtime.js';
 import {
+  deleteSession,
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
@@ -28,6 +30,7 @@ import {
   getMessagesSince,
   getNewMessages,
   getRouterState,
+  getSessionMeta,
   initDatabase,
   setRegisteredGroup,
   setRouterState,
@@ -37,7 +40,7 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
-import { startIpcWatcher } from './ipc.js';
+import { flushGroupIpcMessages, startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -210,12 +213,37 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
+  // Expire idle sessions: if the last activity was more than SESSION_IDLE_TTL_MS ago,
+  // clear the session so the agent starts fresh instead of resuming stale context.
+  const sessionMeta = getSessionMeta(group.folder);
+  if (sessionMeta?.lastUsed) {
+    const idleMs = Date.now() - new Date(sessionMeta.lastUsed).getTime();
+    if (idleMs > SESSION_IDLE_TTL_MS) {
+      logger.info(
+        { group: group.name, idleMin: Math.round(idleMs / 60000), ttlMin: Math.round(SESSION_IDLE_TTL_MS / 60000) },
+        'Session idle too long, clearing for fresh start',
+      );
+      delete sessions[group.folder];
+      deleteSession(group.folder);
+    }
+  }
+
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
 
+  // Wire up streaming drafts for channels that support it (e.g. Telegram)
+  const onStreamDelta = channel.sendStreamDelta
+    ? (text: string) => {
+        channel.sendStreamDelta!(chatJid, text).catch((err) =>
+          logger.debug({ chatJid, err }, 'Stream delta error'),
+        );
+      }
+    : undefined;
+
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
+    queue.notifyActivity(chatJid);
     if (result.result) {
       const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
@@ -236,7 +264,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (result.status === 'error') {
       hadError = true;
     }
-  });
+  }, onStreamDelta);
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -263,6 +291,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  onStreamDelta?: (text: string) => void,
 ): Promise<'success' | 'error'> {
   const isMain = group.folder === MAIN_GROUP_FOLDER;
   const sessionId = sessions[group.folder];
@@ -316,6 +345,7 @@ async function runAgent(
       },
       (proc, containerName) => queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
+      onStreamDelta,
     );
 
     if (output.newSessionId) {
@@ -335,6 +365,170 @@ async function runAgent(
   } catch (err) {
     logger.error({ group: group.name, err }, 'Agent error');
     return 'error';
+  }
+}
+
+// Registry for subagent IPC activity callbacks.
+// When the IPC watcher processes a message from a group with an active subagent,
+// it calls the registered callback to reset the stale timer.
+const subagentIpcCallbacks = new Map<string, () => void>();
+
+function registerSubagentIpcCallback(groupFolder: string, cb: () => void): void {
+  subagentIpcCallbacks.set(groupFolder, cb);
+}
+
+function unregisterSubagentIpcCallback(groupFolder: string): void {
+  subagentIpcCallbacks.delete(groupFolder);
+}
+
+export function notifySubagentIpcActivity(groupFolder: string): void {
+  const cb = subagentIpcCallbacks.get(groupFolder);
+  if (cb) cb();
+}
+
+/**
+ * Run a delegated subagent task in an independent container.
+ * The subagent runs immediately in the background, non-blocking.
+ */
+async function runDelegatedTask(
+  chatJid: string,
+  prompt: string,
+  contextMode: 'group' | 'isolated',
+  model: string | null,
+  taskName: string,
+): Promise<void> {
+  const group = registeredGroups[chatJid];
+  if (!group) {
+    logger.error({ chatJid }, 'Group not found for delegated task');
+    return;
+  }
+
+  const isMain = group.folder === MAIN_GROUP_FOLDER;
+  const modelLabel = model || 'Sonnet';
+  const wrappedPrompt = `[DELEGATED TASK: "${taskName}"]
+
+You are a subagent running in an independent container. Your parent agent delegated this task to you.
+
+IMPORTANT RULES:
+• Your text output is NOT automatically sent to the user. You MUST use mcp__nanoclaw__send_message to deliver your final result.
+• EVERY message you send MUST start with 🤖. Format: "🤖 ${modelLabel} | ${taskName} | [status]"
+
+PROGRESS UPDATES — send exactly these:
+1. When you START: send_message "🤖 ${modelLabel} | ${taskName} | Starting"
+2. When you START a major step: send_message "🤖 ${modelLabel} | ${taskName} | [what you're starting]"
+3. When you FINISH a major step: send_message "🤖 ${modelLabel} | ${taskName} | ✓ [what you finished]"
+4. When DONE with everything: send_message "🤖 ${modelLabel} | ${taskName} | ✅ Complete"
+
+TASK:
+${prompt}`;
+
+  // Subagents always start fresh — resuming the main session causes context confusion
+  const sessionId = undefined;
+
+  const taskQueueJid = `__task__${chatJid}`;
+  const TASK_CLOSE_DELAY_MS = 10000;
+  let closeTimer: ReturnType<typeof setTimeout> | null = null;
+  let staleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleClose = () => {
+    if (closeTimer) return;
+    closeTimer = setTimeout(() => {
+      logger.debug({ taskName }, 'Closing delegated task container after result');
+      queue.closeStdin(taskQueueJid);
+    }, TASK_CLOSE_DELAY_MS);
+  };
+
+  const resetStaleTimer = () => {
+    if (staleTimer) clearTimeout(staleTimer);
+    const STALE_SUBAGENT_MS = 600000; // 10 min
+    staleTimer = setTimeout(() => {
+      const idleMin = Math.round(STALE_SUBAGENT_MS / 60000);
+      logger.warn({ taskName, taskQueueJid, idleMin }, 'Killing stale subagent');
+      queue.closeStdin(taskQueueJid);
+      const ch = findChannel(channels, chatJid);
+      ch?.sendMessage(chatJid, `Killed stale subagent "${taskName}" — it was idle for ${idleMin} minutes.`).catch(() => {});
+    }, STALE_SUBAGENT_MS);
+  };
+  resetStaleTimer();
+
+  registerSubagentIpcCallback(group.folder, resetStaleTimer);
+
+  const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
+  const tasks = getAllTasks();
+  writeTasksSnapshot(
+    group.folder,
+    isMainGroup,
+    tasks.map((t) => ({
+      id: t.id,
+      groupFolder: t.group_folder,
+      prompt: t.prompt,
+      schedule_type: t.schedule_type,
+      schedule_value: t.schedule_value,
+      status: t.status,
+      next_run: t.next_run,
+    })),
+  );
+
+  const startTime = Date.now();
+
+  try {
+    const output = await runContainerAgent(
+      group,
+      {
+        prompt: wrappedPrompt,
+        sessionId,
+        groupFolder: group.folder,
+        chatJid,
+        isMain,
+        isScheduledTask: true,
+        assistantName: ASSISTANT_NAME,
+        modelOverride: model || undefined,
+      },
+      (proc, containerName) => queue.registerProcess(taskQueueJid, proc, containerName, group.folder),
+      async (streamedOutput: ContainerOutput) => {
+        queue.notifyActivity(taskQueueJid);
+        if (streamedOutput.result) {
+          scheduleClose();
+        }
+        if (streamedOutput.status === 'success') {
+          queue.notifyIdle(taskQueueJid);
+        }
+        resetStaleTimer();
+      },
+    );
+
+    if (closeTimer) clearTimeout(closeTimer);
+    if (staleTimer) clearTimeout(staleTimer);
+    unregisterSubagentIpcCallback(group.folder);
+
+    // Flush any IPC messages the subagent wrote in its final moments.
+    await flushGroupIpcMessages(group.folder);
+
+    // Safety net: relay non-internal result text to chat.
+    if (output.result) {
+      const raw = typeof output.result === 'string' ? output.result : JSON.stringify(output.result);
+      const text = raw
+        .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+        .trim();
+      if (text) {
+        const ch = findChannel(channels, chatJid);
+        if (ch) {
+          await ch.sendMessage(chatJid, text).catch((err) => {
+            logger.error({ taskName, err }, 'Failed to relay subagent result');
+          });
+        }
+      }
+    }
+
+    logger.info(
+      { taskName, durationMs: Date.now() - startTime, status: output.status },
+      'Delegated task completed',
+    );
+  } catch (err) {
+    if (closeTimer) clearTimeout(closeTimer);
+    if (staleTimer) clearTimeout(staleTimer);
+    unregisterSubagentIpcCallback(group.folder);
+    logger.error({ taskName, error: err }, 'Delegated task failed');
   }
 }
 
@@ -450,6 +644,7 @@ function recoverPendingMessages(): void {
 function ensureContainerSystemRunning(): void {
   ensureContainerRuntimeRunning();
   cleanupOrphans();
+  cleanupStaleIpcFiles();
 }
 
 async function main(): Promise<void> {
@@ -516,8 +711,21 @@ async function main(): Promise<void> {
     syncGroupMetadata: (force) => whatsapp?.syncGroupMetadata(force) ?? Promise.resolve(),
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) => writeGroupsSnapshot(gf, im, ag, rj),
+    delegateTask: (targetJid, prompt, contextMode, model, taskName, _sourceGroup) => {
+      runDelegatedTask(targetJid, prompt, contextMode, model, taskName).catch((err) =>
+        logger.error({ targetJid, taskName, err }, 'Delegated task failed'),
+      );
+    },
+    onIpcActivity: (sourceGroup) => notifySubagentIpcActivity(sourceGroup),
   });
   queue.setProcessMessagesFn(processGroupMessages);
+  queue.setOnUnreadIpcFn((groupJid) => {
+    // Roll back the cursor so processGroupMessages re-fetches messages
+    // that were queued but never read by the exiting container
+    delete lastAgentTimestamp[groupJid];
+    saveState();
+    logger.info({ groupJid }, 'Rolled back cursor due to unread IPC messages');
+  });
   recoverPendingMessages();
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');

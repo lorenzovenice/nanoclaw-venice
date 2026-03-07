@@ -55,9 +55,21 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
 ); // 10MB default
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseInt(
-  process.env.IDLE_TIMEOUT || '1800000',
+  process.env.IDLE_TIMEOUT || '900000',
   10,
-); // 30min default — how long to keep container alive after last result
+); // 15min default — how long to keep container alive after last result
+export const SESSION_IDLE_TTL_MS = parseInt(
+  process.env.SESSION_IDLE_TTL_MS || '1800000',
+  10,
+); // 30min default — sessions idle longer than this are cleared
+export const MAX_IPC_MESSAGES_PER_CONTAINER = parseInt(
+  process.env.MAX_IPC_MESSAGES || '30',
+  10,
+);
+export const CIRCUIT_BREAKER_THRESHOLD = parseInt(
+  process.env.CIRCUIT_BREAKER_THRESHOLD || '3',
+  10,
+);
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
