@@ -112,6 +112,7 @@ function buildContent(text: string): string | ContentBlock[] {
 const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
+const IPC_COALESCE_MS = 3_000;
 
 /**
  * Push-based async iterable for streaming user messages to the SDK.
@@ -161,11 +162,20 @@ async function readStdin(): Promise<string> {
 
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+const STREAM_TEXT_MARKER = '---NANOCLAW_STREAM_TEXT---';
+const STREAM_TEXT_END_MARKER = '---NANOCLAW_STREAM_TEXT_END---';
 
 function writeOutput(output: ContainerOutput): void {
   console.log(OUTPUT_START_MARKER);
   console.log(JSON.stringify(output));
   console.log(OUTPUT_END_MARKER);
+}
+
+/** Emit accumulated streaming text for the host to display as a draft. */
+function writeStreamText(text: string): void {
+  console.log(STREAM_TEXT_MARKER);
+  console.log(text);
+  console.log(STREAM_TEXT_END_MARKER);
 }
 
 function log(message: string): void {
@@ -195,7 +205,8 @@ function getSessionSummary(sessionId: string, transcriptPath: string): string | 
 }
 
 /**
- * Archive the full transcript to conversations/ before compaction.
+ * Archive the full transcript to conversations/ before compaction,
+ * then inject a recovery message so the agent re-reads its notes.
  */
 function createPreCompactHook(assistantName?: string): HookCallback {
   return async (input, _toolUseId, _context) => {
@@ -233,6 +244,40 @@ function createPreCompactHook(assistantName?: string): HookCallback {
       log(`Archived conversation to ${filePath}`);
     } catch (err) {
       log(`Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // Inject a recovery message via IPC so the agent re-reads its notes
+    // after the SDK compresses the context. Include the last ~15 exchanges
+    // so the agent has recent context inline.
+    try {
+      fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
+
+      let recentExchanges = '';
+      try {
+        const content = fs.readFileSync(transcriptPath, 'utf-8');
+        const allMessages = parseTranscript(content);
+        const tail = allMessages.slice(-15);
+        if (tail.length > 0) {
+          const lines = tail.map(m => {
+            const label = m.role === 'user' ? 'User' : (assistantName || 'Assistant');
+            const truncated = m.content.length > 500 ? m.content.slice(0, 500) + '...' : m.content;
+            return `${label}: ${truncated}`;
+          });
+          recentExchanges = `\n\nHere are your most recent exchanges:\n\n${lines.join('\n')}\n`;
+        }
+      } catch {
+        // If we can't extract exchanges, proceed without them
+      }
+
+      const recoveryMsg = {
+        type: 'message',
+        text: `[SYSTEM: Your conversation context was just compacted. You may have lost details from earlier in this conversation.${recentExchanges}\nAlso re-read /workspace/group/session-handoff.md for broader context. Do NOT mention compaction to the user — just seamlessly continue.]`,
+      };
+      const recoveryFile = path.join(IPC_INPUT_DIR, `recovery-${Date.now()}.json`);
+      fs.writeFileSync(recoveryFile, JSON.stringify(recoveryMsg));
+      log('Wrote compaction recovery message to IPC input');
+    } catch (err) {
+      log(`Failed to write recovery message: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     return {};
@@ -383,19 +428,41 @@ function drainIpcInput(): string[] {
 /**
  * Wait for a new IPC message or _close sentinel.
  * Returns the messages as a single string, or null if _close.
+ *
+ * After detecting the first message, buffers for IPC_COALESCE_MS to
+ * capture rapid-fire follow-ups (e.g. two messages sent seconds apart)
+ * and combine them into a single turn.
  */
 function waitForIpcMessage(): Promise<string | null> {
   return new Promise((resolve) => {
+    let accumulated: string[] = [];
+    let bufferDeadline: number | null = null;
+
     const poll = () => {
       if (shouldClose()) {
-        resolve(null);
+        if (accumulated.length > 0) {
+          resolve(accumulated.join('\n'));
+        } else {
+          resolve(null);
+        }
         return;
       }
+
       const messages = drainIpcInput();
       if (messages.length > 0) {
-        resolve(messages.join('\n'));
+        accumulated.push(...messages);
+        if (bufferDeadline === null) {
+          bufferDeadline = Date.now() + IPC_COALESCE_MS;
+          log(`First message received, buffering for ${IPC_COALESCE_MS}ms to coalesce`);
+        }
+      }
+
+      if (bufferDeadline !== null && Date.now() >= bufferDeadline) {
+        log(`Coalesce window closed, returning ${accumulated.length} message(s)`);
+        resolve(accumulated.join('\n'));
         return;
       }
+
       setTimeout(poll, IPC_POLL_MS);
     };
     poll();
@@ -479,10 +546,17 @@ async function runQuery(
   } catch { /* use default */ }
   log(`Using model: ${model}`);
 
+  // Streaming state: accumulate text deltas and flush periodically
+  const STREAM_FLUSH_MS = 300;
+  let streamBuffer = '';
+  let lastStreamFlush = 0;
+  let isTextBlock = false;
+
   for await (const message of query({
     prompt: stream,
     options: {
       model,
+      includePartialMessages: true,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
@@ -525,6 +599,42 @@ async function runQuery(
     const msgType = message.type === 'system' ? `system/${(message as { subtype?: string }).subtype}` : message.type;
     log(`[msg #${messageCount}] type=${msgType}`);
 
+    // Stream text deltas to host for real-time draft display
+    if (message.type === 'stream_event') {
+      const event = (message as any).event;
+      const parentToolUseId = (message as any).parent_tool_use_id;
+
+      // Only stream main agent text (skip subagent streams)
+      if (parentToolUseId === null || parentToolUseId === undefined) {
+        if (event?.type === 'content_block_start') {
+          isTextBlock = event.content_block?.type === 'text';
+          if (isTextBlock) {
+            streamBuffer = '';
+            lastStreamFlush = 0;
+          }
+        }
+
+        if (event?.type === 'content_block_delta' && isTextBlock) {
+          if (event.delta?.type === 'text_delta' && event.delta.text) {
+            streamBuffer += event.delta.text;
+            const now = Date.now();
+            if (now - lastStreamFlush >= STREAM_FLUSH_MS) {
+              writeStreamText(streamBuffer);
+              lastStreamFlush = now;
+            }
+          }
+        }
+
+        if (event?.type === 'content_block_stop' && isTextBlock) {
+          if (streamBuffer) {
+            writeStreamText(streamBuffer);
+          }
+          streamBuffer = '';
+          isTextBlock = false;
+        }
+      }
+    }
+
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
     }
@@ -552,6 +662,8 @@ async function runQuery(
   }
 
   ipcPolling = false;
+  streamBuffer = '';
+  isTextBlock = false;
   log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
 }

@@ -92,6 +92,13 @@ function createSchema(database: Database.Database): void {
     );
   `);
 
+  // Add last_used column to sessions if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(`ALTER TABLE sessions ADD COLUMN last_used TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
   // Add context_mode column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
@@ -525,9 +532,18 @@ export function getSession(groupFolder: string): string | undefined {
 }
 
 export function setSession(groupFolder: string, sessionId: string): void {
+  const now = new Date().toISOString();
   db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
-  ).run(groupFolder, sessionId);
+    'INSERT OR REPLACE INTO sessions (group_folder, session_id, last_used) VALUES (?, ?, ?)',
+  ).run(groupFolder, sessionId, now);
+}
+
+export function getSessionMeta(groupFolder: string): { sessionId: string; lastUsed: string | null } | undefined {
+  const row = db
+    .prepare('SELECT session_id, last_used FROM sessions WHERE group_folder = ?')
+    .get(groupFolder) as { session_id: string; last_used: string | null } | undefined;
+  if (!row) return undefined;
+  return { sessionId: row.session_id, lastUsed: row.last_used };
 }
 
 export function getAllSessions(): Record<string, string> {

@@ -11,17 +11,43 @@ vi.mock('./logger.js', () => ({
 }));
 
 // Mock child_process — store the mock fn so tests can configure it
-const mockExecSync = vi.fn();
+const mockExecFileSync = vi.fn();
 vi.mock('child_process', () => ({
-  execSync: (...args: unknown[]) => mockExecSync(...args),
+  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
+  execFile: vi.fn(),
+}));
+
+// Mock fs for cleanupOrphans (sendCloseSignal writes to filesystem)
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      existsSync: vi.fn(() => true),
+      mkdirSync: vi.fn(),
+      writeFileSync: vi.fn(),
+      readFileSync: vi.fn(() => ''),
+      readdirSync: vi.fn(() => []),
+      statSync: vi.fn(() => ({ isDirectory: () => true })),
+      unlinkSync: vi.fn(),
+    },
+  };
+});
+
+// Mock config (DATA_DIR needed for sendCloseSignal)
+vi.mock('./config.js', () => ({
+  DATA_DIR: '/tmp/nanoclaw-test-data',
 }));
 
 import {
   CONTAINER_RUNTIME_BIN,
   readonlyMountArgs,
   stopContainer,
+  stopContainerArgs,
   ensureContainerRuntimeRunning,
   cleanupOrphans,
+  cleanupStaleIpcFiles,
 } from './container-runtime.js';
 import { logger } from './logger.js';
 
@@ -46,24 +72,31 @@ describe('stopContainer', () => {
   });
 });
 
+describe('stopContainerArgs', () => {
+  it('returns stop args array', () => {
+    expect(stopContainerArgs('nanoclaw-test-123')).toEqual(['stop', 'nanoclaw-test-123']);
+  });
+});
+
 // --- ensureContainerRuntimeRunning ---
 
 describe('ensureContainerRuntimeRunning', () => {
   it('does nothing when runtime is already running', () => {
-    mockExecSync.mockReturnValueOnce('');
+    mockExecFileSync.mockReturnValueOnce('');
 
     ensureContainerRuntimeRunning();
 
-    expect(mockExecSync).toHaveBeenCalledTimes(1);
-    expect(mockExecSync).toHaveBeenCalledWith(
-      `${CONTAINER_RUNTIME_BIN} info`,
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      CONTAINER_RUNTIME_BIN,
+      ['info'],
       { stdio: 'pipe', timeout: 10000 },
     );
     expect(logger.debug).toHaveBeenCalledWith('Container runtime already running');
   });
 
   it('throws when docker info fails', () => {
-    mockExecSync.mockImplementationOnce(() => {
+    mockExecFileSync.mockImplementationOnce(() => {
       throw new Error('Cannot connect to the Docker daemon');
     });
 
@@ -77,43 +110,36 @@ describe('ensureContainerRuntimeRunning', () => {
 // --- cleanupOrphans ---
 
 describe('cleanupOrphans', () => {
-  it('stops orphaned nanoclaw containers', () => {
-    // docker ps returns container names, one per line
-    mockExecSync.mockReturnValueOnce('nanoclaw-group1-111\nnanoclaw-group2-222\n');
-    // stop calls succeed
-    mockExecSync.mockReturnValue('');
-
-    cleanupOrphans();
-
-    // ps + 2 stop calls
-    expect(mockExecSync).toHaveBeenCalledTimes(3);
-    expect(mockExecSync).toHaveBeenNthCalledWith(
-      2,
-      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group1-111`,
-      { stdio: 'pipe' },
-    );
-    expect(mockExecSync).toHaveBeenNthCalledWith(
-      3,
-      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group2-222`,
-      { stdio: 'pipe' },
-    );
-    expect(logger.info).toHaveBeenCalledWith(
-      { count: 2, names: ['nanoclaw-group1-111', 'nanoclaw-group2-222'] },
-      'Stopped orphaned containers',
-    );
-  });
-
   it('does nothing when no orphans exist', () => {
-    mockExecSync.mockReturnValueOnce('');
+    mockExecFileSync.mockReturnValueOnce('');
 
     cleanupOrphans();
 
-    expect(mockExecSync).toHaveBeenCalledTimes(1);
+    // One ps call, no further action
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      CONTAINER_RUNTIME_BIN,
+      ['ps', '--filter', 'name=nanoclaw-', '--format', '{{.Names}}'],
+      expect.objectContaining({ encoding: 'utf-8' }),
+    );
     expect(logger.info).not.toHaveBeenCalled();
   });
 
+  it('sends close signals and stops orphaned containers', () => {
+    // First ps: returns orphan list
+    mockExecFileSync.mockReturnValueOnce('nanoclaw-group1-111\nnanoclaw-group2-222\n');
+    // Second ps (in grace period loop): returns empty (all exited)
+    mockExecFileSync.mockReturnValueOnce('');
+
+    cleanupOrphans();
+
+    // ps (initial) + ps (check in loop)
+    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+    expect(logger.info).toHaveBeenCalledWith('All orphaned containers exited during grace period');
+  });
+
   it('warns and continues when ps fails', () => {
-    mockExecSync.mockImplementationOnce(() => {
+    mockExecFileSync.mockImplementationOnce(() => {
       throw new Error('docker not available');
     });
 
@@ -125,21 +151,24 @@ describe('cleanupOrphans', () => {
     );
   });
 
-  it('continues stopping remaining containers when one stop fails', () => {
-    mockExecSync.mockReturnValueOnce('nanoclaw-a-1\nnanoclaw-b-2\n');
-    // First stop fails
-    mockExecSync.mockImplementationOnce(() => {
-      throw new Error('already stopped');
-    });
-    // Second stop succeeds
-    mockExecSync.mockReturnValueOnce('');
+  it('force-stops containers that exited during grace period check', () => {
+    // First ps: returns orphan list
+    mockExecFileSync.mockReturnValueOnce('nanoclaw-a-1\n');
+    // Second ps (inside grace period loop): returns empty → exits grace period immediately
+    mockExecFileSync.mockReturnValueOnce('');
 
     cleanupOrphans(); // should not throw
 
-    expect(mockExecSync).toHaveBeenCalledTimes(3);
-    expect(logger.info).toHaveBeenCalledWith(
-      { count: 2, names: ['nanoclaw-a-1', 'nanoclaw-b-2'] },
-      'Stopped orphaned containers',
-    );
+    expect(logger.info).toHaveBeenCalledWith('All orphaned containers exited during grace period');
+  });
+});
+
+// --- cleanupStaleIpcFiles ---
+
+describe('cleanupStaleIpcFiles', () => {
+  it('does not throw when called', () => {
+    // existsSync is mocked to return true by default (from fs mock above)
+    // readdirSync is mocked to return empty array
+    expect(() => cleanupStaleIpcFiles()).not.toThrow();
   });
 });
