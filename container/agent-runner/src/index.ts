@@ -581,6 +581,11 @@ async function main(): Promise<void> {
     sdkEnv[key] = value;
   }
 
+  // Expose GH_TOKEN to process.env so gh CLI works in Bash subprocesses
+  if (sdkEnv.GH_TOKEN) {
+    process.env.GH_TOKEN = sdkEnv.GH_TOKEN;
+  }
+
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 

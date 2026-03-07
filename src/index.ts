@@ -5,6 +5,7 @@ import {
   ASSISTANT_NAME,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
+  MAX_MESSAGE_AGE,
   POLL_INTERVAL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
@@ -128,6 +129,33 @@ export function _setRegisteredGroups(groups: Record<string, RegisteredGroup>): v
 }
 
 /**
+ * Filter out messages older than MAX_MESSAGE_AGE.
+ * Advances the cursor past stale messages so they're never retried.
+ */
+function filterStaleMessages(
+  allMessages: NewMessage[],
+  chatJid: string,
+  groupName: string,
+): NewMessage[] {
+  const cutoff = new Date(Date.now() - MAX_MESSAGE_AGE).toISOString();
+  const staleCount = allMessages.filter((m) => m.timestamp < cutoff).length;
+  const fresh = allMessages.filter((m) => m.timestamp >= cutoff);
+
+  if (staleCount > 0) {
+    logger.warn(
+      { group: groupName, staleCount, cutoff },
+      'Dropped stale messages (older than MAX_MESSAGE_AGE)',
+    );
+    if (fresh.length === 0 && allMessages.length > 0) {
+      lastAgentTimestamp[chatJid] = allMessages[allMessages.length - 1].timestamp;
+      saveState();
+    }
+  }
+
+  return fresh;
+}
+
+/**
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
  */
@@ -144,7 +172,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
 
   const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
-  const missedMessages = getMessagesSince(chatJid, sinceTimestamp, ASSISTANT_NAME);
+  const allMissed = getMessagesSince(chatJid, sinceTimestamp, ASSISTANT_NAME);
+  const missedMessages = filterStaleMessages(allMissed, chatJid, group.name);
 
   if (missedMessages.length === 0) return true;
 

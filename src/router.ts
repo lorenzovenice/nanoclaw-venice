@@ -1,4 +1,5 @@
 import { Channel, NewMessage } from './types.js';
+import { sanitizeUnicode } from './external-content.js';
 
 export function escapeXml(s: string): string {
   if (!s) return '';
@@ -11,7 +12,7 @@ export function escapeXml(s: string): string {
 
 export function formatMessages(messages: NewMessage[]): string {
   const lines = messages.map((m) =>
-    `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(m.content)}</message>`,
+    `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(sanitizeUnicode(m.content))}</message>`,
   );
   return `<messages>\n${lines.join('\n')}\n</messages>`;
 }

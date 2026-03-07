@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@theme {
+  --color-venice-blue: #0A1E3F;
+  --color-venice-blue-light: #112d5a;
+  --color-venice-gold: #D4AF37;
+  --color-venice-marble: #F8F8F8;
+  --color-venice-lantern: #FFA726;
+  --color-venice-chrome: #C0C0C0;
+  --color-venice-shadow: #333333;
+  --color-venice-success: #4CAF50;
+  --color-venice-error: #EF5350;
+  --font-heading: 'Playfair Display', serif;
+  --font-body: 'Inter', sans-serif;
+}
+
+body {
+  @apply bg-venice-blue text-venice-marble font-body;
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-heading);
+}
+
+/* Glass-morphism card */
+.glass-card {
+  @apply bg-venice-blue-light/60 backdrop-blur-md border border-venice-gold/20 rounded-lg;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+/* Gold glow effect for CTAs and focus */
+.gold-glow {
+  box-shadow: 0 0 20px rgba(212, 175, 55, 0.3);
+}
+
+.gold-glow-strong {
+  box-shadow: 0 0 30px rgba(212, 175, 55, 0.5);
+}
