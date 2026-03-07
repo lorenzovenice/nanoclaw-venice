@@ -13,7 +13,7 @@ import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
+import { RegisteredGroup, ScheduledTask } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -267,6 +267,28 @@ export async function processTaskIpc(
           { taskId, sourceGroup, targetFolder, contextMode },
           'Task created via IPC',
         );
+      }
+      break;
+
+    case 'update_task':
+      if (data.taskId) {
+        const task = getTaskById(data.taskId);
+        if (!task) {
+          logger.warn({ taskId: data.taskId, sourceGroup }, 'Task not found for update');
+          break;
+        }
+        if (!isMain && task.group_folder !== sourceGroup) {
+          logger.warn({ taskId: data.taskId, sourceGroup }, 'Unauthorized task update attempt');
+          break;
+        }
+        const updates: Parameters<typeof updateTask>[1] = {};
+        if (data.prompt !== undefined) updates.prompt = data.prompt;
+        if (data.schedule_type !== undefined) {
+          updates.schedule_type = data.schedule_type as ScheduledTask['schedule_type'];
+        }
+        if (data.schedule_value !== undefined) updates.schedule_value = data.schedule_value;
+        updateTask(data.taskId, updates);
+        logger.info({ taskId: data.taskId, updates, sourceGroup }, 'Task updated via IPC');
       }
       break;
 
